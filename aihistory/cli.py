@@ -5,7 +5,8 @@
     aihistory backup                  # verified, catalogued copy of raw history
     aihistory normalize               # redacted corpus with owner/agent/harness roles
     aihistory index                   # local full-text index of what you wrote
-    aihistory search "postgres migration"
+    aihistory search "postgres migration"   # see `aihistory search -h` for the query syntax
+    aihistory show CONVERSATION --at SEQ   # a search hit with the messages around it
     aihistory memories                # memory candidates -> memories/REVIEW.md
     aihistory agent-me push [--apply] # send ticked memories to a local Agent-Me
     aihistory verify                  # re-check every backed-up file
@@ -107,10 +108,37 @@ def cmd_index(args):
 
 
 def cmd_search(args):
-    from .index import search
+    from .index import query
 
-    for hit in search(_out(args), " ".join(args.query), args.limit):
-        print(f"{(hit['timestamp'] or '')[:10]}  {hit['source']:14} {hit['snippet']}")
+    result = query(_out(args), " ".join(args.query), mode=args.mode, limit=args.limit, source=args.source,
+                   role=args.role, workspace=args.workspace, after=args.after, before=args.before)
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=1))
+        return 0
+    if result["corrections"]:
+        print("No matches as typed; showing " + ", ".join(f"{k} → {v}" for k, v in result["corrections"].items()))
+    elif result["mode_used"] in ("any", "substring"):
+        print({"any": "No message has every word; showing messages with any of them.",
+               "substring": "No whole-word matches; showing messages that contain the text."}[result["mode_used"]])
+    for hit in result["hits"]:
+        print(f"{(hit['timestamp'] or '')[:10]}  {hit['source']:14} {hit['snippet']}  ({hit['conversation']} --at {hit['seq']})")
+    if not result["hits"]:
+        print("No matches.")
+    return 0
+
+
+def cmd_show(args):
+    from .index import show
+
+    context = args.context if args.context is not None else (3 if args.at is not None else None)
+    conversation = show(_out(args), args.conversation, args.at, context)
+    if args.json:
+        print(json.dumps(conversation, ensure_ascii=False, indent=1))
+        return 0
+    print(f"# {conversation['source']}  {conversation['title'] or ''}  ({conversation['conversation']})")
+    for event in conversation["events"]:
+        label = event["role"] + (f":{event['tool']}" if event.get("tool") else "")
+        print(f"{'>' if event['hit'] else ' '} [{label}] {event['text']}")
     return 0
 
 
@@ -155,9 +183,21 @@ def main(argv=None) -> int:
     sub = parser.add_subparsers(dest="command")
     for name in ("run", "scan", "backup", "normalize", "index", "memories", "verify"):
         sub.add_parser(name)
-    search = sub.add_parser("search")
+    from .query import __doc__ as query_syntax
+
+    search = sub.add_parser("search", description=query_syntax, formatter_class=argparse.RawDescriptionHelpFormatter)
     search.add_argument("query", nargs="+")
     search.add_argument("--limit", type=int, default=10)
+    search.add_argument("--mode", choices=("auto", "all", "any", "substring"), default="auto",
+                        help="auto tries every word, then any word, then substrings, then a spelling fix")
+    for name in ("source", "role", "workspace", "after", "before"):
+        search.add_argument(f"--{name}", help=f"same as {name}: in the query")
+    search.add_argument("--json", action="store_true", help="machine-readable hits")
+    show = sub.add_parser("show", help="a conversation from the index, every message labelled by who wrote it")
+    show.add_argument("conversation", help="the `conversation` value of a search hit")
+    show.add_argument("--at", type=int, help="the hit's message number (seq); marked with >")
+    show.add_argument("--context", type=int, help="messages to show on each side of --at (default 3)")
+    show.add_argument("--json", action="store_true")
     agent = sub.add_parser("agent-me", help="send ticked memories to a local Agent-Me")
     agent_sub = agent.add_subparsers(dest="agent_command", required=True)
     agent_push = agent_sub.add_parser("push")
@@ -166,7 +206,7 @@ def main(argv=None) -> int:
     agent_push.add_argument("--apply", action="store_true")
     args = parser.parse_args(argv)
     handlers = {"run": cmd_run, "scan": cmd_scan, "backup": cmd_backup, "normalize": cmd_normalize, "index": cmd_index,
-                "search": cmd_search, "memories": cmd_memories, "agent-me": cmd_agent_me, "verify": cmd_verify, None: cmd_run}
+                "search": cmd_search, "show": cmd_show, "memories": cmd_memories, "agent-me": cmd_agent_me, "verify": cmd_verify, None: cmd_run}
     try:
         return handlers[args.command](args)
     except (ValueError, RuntimeError, FileNotFoundError) as error:

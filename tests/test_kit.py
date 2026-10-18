@@ -1,6 +1,7 @@
 import io
 import json
 import shutil
+import sqlite3
 import stat
 import tempfile
 import threading
@@ -27,6 +28,13 @@ except ImportError:
 def run(*args) -> int:
     with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
         return cli.main(list(args))
+
+
+def run_capture(*args) -> tuple[int, str]:
+    stdout = io.StringIO()
+    with redirect_stdout(stdout), redirect_stderr(io.StringIO()):
+        status = cli.main(list(args))
+    return status, stdout.getvalue()
 
 
 class KitTests(unittest.TestCase):
@@ -288,6 +296,71 @@ class AgentTraceTests(unittest.TestCase):
         empty.mkdir()
         with self.assertRaisesRegex(ValueError, "no agent-trace sessions"):
             discover(self.home, agent_traces=[empty])
+
+
+class SearchTests(unittest.TestCase):
+    """Search over your own words: query syntax, filters, typo and substring fallbacks, context."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.home = make_home(Path(cls.tmp.name) / "home")
+        cls.out = Path(cls.tmp.name) / "out"
+        assert run("--home", str(cls.home), "--out", str(cls.out), "run") == 0
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def snippets(self, text):
+        return [h["snippet"] for h in index.query(self.out, text)["hits"]]
+
+    def test_phrases_exclusions_prefixes_and_filters(self):
+        self.assertEqual({h["source"] for h in index.query(self.out, "building")["hits"]}, {"claude-code", "codex"})
+        self.assertEqual({h["source"] for h in index.query(self.out, "source:codex building")["hits"]}, {"codex"})
+        self.assertTrue(self.snippets('"write tests"'), "an exact phrase")
+        building = self.snippets("building -kite")
+        self.assertTrue(building and all("sailboat" in s for s in building), building)
+        self.assertTrue(any("kite" in s for s in self.snippets("sailboat OR kite")))
+        self.assertTrue(any("sailboat" in s for s in self.snippets("sailboat OR kite")))
+        self.assertTrue(self.snippets("kit*"), "a prefix matches kite")
+        self.assertTrue(index.query(self.out, "test", mode="all")["hits"], "stemming: test finds tests")
+        self.assertEqual(self.snippets("kite after:2026-10-01"), [])
+        self.assertTrue(self.snippets("kite before:2026-08-01"))
+
+    def test_typos_and_substrings_still_find_your_words(self):
+        typo = index.query(self.out, "sailbaot")
+        self.assertEqual(typo["corrections"], {"sailbaot": "sailboat"})
+        self.assertTrue(any("sailboat" in h["snippet"] for h in typo["hits"]))
+        part = index.query(self.out, "ailboa")
+        self.assertEqual(part["mode_used"], "substring")
+        self.assertTrue(part["hits"])
+
+    def test_show_gives_a_hit_with_its_neighbours(self):
+        status, output = run_capture("--out", str(self.out), "search", "--json", '"write tests"')
+        self.assertEqual(status, 0)
+        hit = json.loads(output)["hits"][0]
+        status, text = run_capture("--out", str(self.out), "show", hit["conversation"], "--at", str(hit["seq"]), "--context", "1")
+        self.assertEqual(status, 0)
+        self.assertIn("> [user] I always write tests first.", text)
+        self.assertIn("[assistant] OK", text)
+        self.assertIn("[harness] <environment_context>", text, "injected text is shown with its label")
+        self.assertNotIn("AGENTS.md instructions", text, "two messages before the hit is outside --context 1")
+
+    def test_hostile_queries_never_raise(self):
+        for text in ('"x', "NEAR(", "*", "-", "a AND", "source:", '""', "')(", "OR", "kite OR", "^", "col:kite"):
+            with self.subTest(text=text):
+                self.assertIsInstance(index.query(self.out, text)["hits"], list)
+
+    def test_an_index_from_an_older_version_asks_for_a_rebuild(self):
+        old = Path(self.tmp.name) / "old"
+        old.mkdir()
+        db = sqlite3.connect(old / "index.sqlite3")
+        db.execute("CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT)")
+        db.commit()
+        db.close()
+        with self.assertRaisesRegex(ValueError, "aihistory index"):
+            index.query(old, "kite")
 
 
 class AgentMeTests(unittest.TestCase):

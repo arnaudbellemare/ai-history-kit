@@ -91,6 +91,7 @@ def read_rollout(path: Path, root: Path) -> dict | None:
         "updated_at": updated,
         "subagent": subagent,
         "origin": path.relative_to(root).as_posix(),
+        "workspace": (meta or {}).get("cwd"),
         "events": events,
         "stats": {},
     }

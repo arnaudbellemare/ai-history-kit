@@ -60,7 +60,7 @@ def _tool_result_text(content) -> str:
 
 def read_session(path: Path, root: Path) -> dict | None:
     subagent = path.name.startswith("agent-") or "subagents" in path.parts
-    events, identity, title = [], None, None
+    events, identity, title, workspace = [], None, None, None
     created = updated = None
     entrypoints = {}
     stats = {"thinking_blocks": 0, "thinking_with_text": 0, "skills_offered": 0, "skill_calls": []}
@@ -76,6 +76,7 @@ def read_session(path: Path, root: Path) -> dict | None:
         if kind not in ("user", "assistant"):
             continue
         identity = identity or row.get("sessionId")
+        workspace = workspace or row.get("cwd")
         subagent = subagent or bool(row.get("isSidechain"))
         if row.get("entrypoint"):
             entrypoints[row["entrypoint"]] = entrypoints.get(row["entrypoint"], 0) + 1
@@ -123,6 +124,7 @@ def read_session(path: Path, root: Path) -> dict | None:
         # but don't become memories.
         "headless": bool(entrypoints) and max(entrypoints, key=entrypoints.get).startswith("sdk"),
         "origin": path.relative_to(root).as_posix(),
+        "workspace": workspace,
         "events": events,
         "stats": stats,
     }
