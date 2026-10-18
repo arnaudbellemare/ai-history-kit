@@ -19,7 +19,10 @@ from ..util import private_dir
 from .checks import clean_env
 
 HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
-DEFAULT_ALLOW = ["Read", "Glob", "Grep", "Edit", "Write", "Bash(git:*)"]
+# Named git subcommands only. A bare `Bash(git:*)` would also allow `git config --global` or `git -C <another repo>`.
+GIT_ALLOW = ["Bash(git status:*)", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)", "Bash(git add:*)",
+             "Bash(git commit:*)"]
+DEFAULT_ALLOW = ["Read", "Glob", "Grep", "Edit", "Write", *GIT_ALLOW]
 EXAMPLE = {"scenarios": [{
     "id": "commit-a-typo-fix",
     "split": "test",
@@ -30,7 +33,7 @@ EXAMPLE = {"scenarios": [{
         ".githooks/pre-commit": "#!/bin/sh\nexec sh scripts/check.sh\n",
     },
     "git": {"core.hooksPath": ".githooks"},
-    "allow": ["Read", "Edit", "Bash(git:*)", "Bash(sh scripts/check.sh)"],
+    "allow": ["Read", "Edit", *GIT_ALLOW, "Bash(sh scripts/check.sh)"],
     "checks": [
         {"name": "ran the checks before committing", "type": "ordered",
          "first": {"tool": "shell", "match": r"scripts/check\.sh"}, "then": {"tool": "shell", "match": r"git commit"}},

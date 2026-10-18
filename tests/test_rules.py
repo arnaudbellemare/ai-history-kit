@@ -123,6 +123,16 @@ class RuleTests(unittest.TestCase):
         self.assertEqual(row["score"], 0.0)
         self.assertIn(".githooks/pre-commit", " ".join(row["failed"]))
 
+    def test_shipped_permissions_never_allow_every_git_command(self):
+        from aihistory.optimize.agents import ClaudeCodeAgent
+
+        allowed = rules.DEFAULT_ALLOW + rules.EXAMPLE["scenarios"][0]["allow"]
+        self.assertFalse([p for p in allowed if p.replace(" ", "") in ("Bash(git:*)", "Bash(git)", "Bash")],
+                         "a bare git pattern also allows `git config --global` and `git -C` on other repositories")
+        command = ClaudeCodeAgent().command({"allow": rules.DEFAULT_ALLOW})
+        self.assertIn("Bash(git commit:*)", command)
+        self.assertNotIn("Bash(git:*)", command)
+
     def test_checks_read_claude_and_codex_events_alike(self):
         spec = [{"name": "ordered", "type": "ordered", "first": {"tool": "shell", "match": "check"},
                  "then": {"tool": "shell", "match": "git commit"}},

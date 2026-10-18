@@ -115,7 +115,7 @@ aihistory optimize report --run commit-rule
 
   The report separates process checks (how the agent worked) from outcome checks (what it left behind), and lists every failed check. The agent's reasoning is never scored.
 - **`optimize train` works on rule runs too.** GEPA rewrites the section from the failed checks, and the result is the arm `gepa`.
-- **Safety: the agent runs real commands here.** Claude Code may use only the tools a scenario lists in `allow` (for example `Bash(git:*)`), in a temporary folder outside your repositories. Git and the checks run without inherited `GIT_*` variables. If a scenario allows broad commands, run the evaluation in a container or VM.
+- **Safety: the agent runs real commands here.** Claude Code may use only the tools a scenario lists in `allow` (for example `Bash(git commit:*)`), in a temporary folder outside your repositories. Git and the checks run without inherited `GIT_*` variables. Name git subcommands rather than allowing `Bash(git:*)`, which would also permit `git config --global` or `git -C` on another repository. If a scenario allows broad commands, run the evaluation in a container or VM.
 
 ## What's in `~/AI-History`
 
