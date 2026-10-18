@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-history-kit"
+version = "0.1.0"
+description = "Back up, clean, search, and turn your Claude Code, Codex, ChatGPT, and Claude.ai history into reviewable personal memories. Everything stays on your machine."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = []
+keywords = ["claude-code", "codex", "chatgpt", "agent-memory", "personal-ai", "privacy"]
+
+[project.scripts]
+aihistory = "aihistory.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["aihistory*"]

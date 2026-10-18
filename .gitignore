@@ -1,0 +1,10 @@
+__pycache__/
+*.egg-info/
+build/
+dist/
+.venv/
+# Never commit personal history or its derivatives.
+AI-History/
+*.sqlite3
+corpus/
+memories/
