@@ -62,6 +62,11 @@ def write(out_dir: Path, scan: list[dict], steps: dict) -> Path:
         lines += ["", "## Cleaned corpus", ""]
         for kind, s in n["sources"].items():
             lines.append(f"- `{s['file']}`: {s['conversations']} conversations, {s['events']} events; roles {s['roles']}")
+        if "hstry" in n["sources"]:
+            h = n["sources"]["hstry"]
+            lines.append(f"- hstry: {h['already_read_natively']} conversations skipped because the Claude Code or Codex reader "
+                         "already had them. For other tools, who-wrote-what is a best guess: hstry doesn't record it, so only "
+                         "known harness text and dispatched worker threads are separated from your words.")
         if n["redactions"]:
             lines.append(f"- Redacted before writing: {n['redactions']}")
         if n["warning_count"]:

@@ -7,7 +7,7 @@ from collections import Counter
 from pathlib import Path
 
 from . import SCHEMA
-from .adapters import claude_code, codex, exports
+from .adapters import claude_code, codex, exports, hstry
 from .redact import Redactor, residual_findings
 from .sources import Source
 from .util import ZstdUnavailable, private_jsonl, sha256_text, short_id
@@ -34,6 +34,9 @@ def _records(source: Source, warnings: list[str]):
     elif source.kind == "claude-export":
         for path in source.files:
             yield from exports.read_claude(path)
+    elif source.kind == "hstry":
+        for path in source.files:
+            yield from hstry.read_db(path)
 
 
 def normalize(sources: list[Source], out_dir: Path, home: Path | None = None) -> dict:
@@ -43,12 +46,18 @@ def normalize(sources: list[Source], out_dir: Path, home: Path | None = None) ->
     for source in sources:
         if source.kind != "codex-db":  # kept as a raw snapshot; its threads duplicate the rollouts
             by_kind.setdefault(source.kind, []).append(source)  # e.g. Codex sessions + archived_sessions
-    for kind, group in by_kind.items():
+    native_ids = set()  # conversations the native readers produced; hstry copies of them are skipped
+    for kind in sorted(by_kind, key=lambda k: k == "hstry"):
+        group = by_kind[kind]
         roles, seen = Counter(), set()
-        records = events = duplicates = residual = 0
+        records = events = duplicates = residual = native_duplicates = 0
         target = out_dir / "corpus" / f"{kind}.jsonl"
         with private_jsonl(target) as write:
             for record in (r for source in group for r in _records(source, warnings)):
+                native = record.pop("native", None)
+                if native and short_id("conv", f"{native}:{record['identity']}") in native_ids:
+                    native_duplicates += 1
+                    continue
                 for event in record["events"]:
                     event["text"] = redactor.text(event["text"])
                 record["title"] = redactor.text(record["title"]) if record.get("title") else None
@@ -63,11 +72,14 @@ def normalize(sources: list[Source], out_dir: Path, home: Path | None = None) ->
                 record = {"schema": SCHEMA, "conversation_id": short_id("conv", f"{record['source']}:{record['identity']}"),
                           **{k: v for k, v in record.items() if k != "identity"}}
                 write(record)
+                if kind in ("claude-code", "codex"):
+                    native_ids.add(record["conversation_id"])
                 records += 1
                 events += len(record["events"])
                 roles.update(e["role"] for e in record["events"])
         summary[kind] = {"file": str(target), "conversations": records, "events": events,
                                 "exact_duplicates_skipped": duplicates, "roles": dict(roles),
+                                "already_read_natively": native_duplicates,
                                 "records_with_residual_secret_patterns": residual}
     return {"sources": summary, "redactions": dict(redactor.counts), "warnings": warnings[:20],
             "warning_count": len(warnings)}

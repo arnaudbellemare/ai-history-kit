@@ -9,6 +9,9 @@
     aihistory memories                # memory candidates -> memories/REVIEW.md
     aihistory agent-me push [--apply] # send ticked memories to a local Agent-Me
     aihistory verify                  # re-check every backed-up file
+
+An hstry database (~/.local/share/hstry/hstry.db, or --from-hstry DB) is read too,
+which adds every tool hstry imports.
 """
 
 from __future__ import annotations
@@ -30,17 +33,20 @@ def _out(args) -> Path:
 def _sources(args, prefer_backup: bool):
     out = _out(args)
     if prefer_backup and (out / "CATALOG.json").exists() and not args.no_backup:
-        live_exports = [s for s in discover(args.home, args.export) if s.kind.endswith("-export")]
+        live_exports = [s for s in discover(args.home, args.export, args.from_hstry) if s.kind.endswith("-export")]
         return backed_up_sources(out) + [s for s in live_exports if not (out / "raw" / "exports" / s.kind).exists()]
-    return discover(args.home, args.export)
+    return discover(args.home, args.export, args.from_hstry)
 
 
 def cmd_scan(args):
-    scan = [coverage(s) for s in discover(args.home, args.export)]
+    scan = [coverage(s) for s in discover(args.home, args.export, args.from_hstry)]
     if not scan:
         print("No AI history found. Looked in ~/.claude/projects and ~/.codex; add exports with --export FILE.")
         return 1
     for s in scan:
+        if s["kind"] == "hstry":
+            print(f"{'hstry':15} {s['conversations']:6} conversations in {s['root']}")
+            continue
         print(f"{s['kind']:15} {s['files']:6} files  {s.get('first_day', ''):10} → {s.get('last_day', ''):10}  "
               f"{len(s.get('days_without_files', []))} days without files")
     return 0
@@ -50,7 +56,7 @@ def cmd_run(args):
     from . import index, memories, normalize, report
 
     out = _out(args)
-    found = discover(args.home, args.export)
+    found = discover(args.home, args.export, args.from_hstry)
     if not found:
         print("No AI history found. Looked in ~/.claude/projects and ~/.codex; add exports with --export FILE.")
         return 1
@@ -74,7 +80,7 @@ def cmd_run(args):
 
 
 def cmd_backup(args):
-    print(json.dumps(back_up(discover(args.home, args.export), _out(args)), indent=1))
+    print(json.dumps(back_up(discover(args.home, args.export, args.from_hstry), _out(args)), indent=1))
     return 0
 
 
@@ -131,6 +137,8 @@ def main(argv=None) -> int:
     parser.add_argument("--home", type=Path, default=None, help=argparse.SUPPRESS)
     parser.add_argument("--export", type=Path, action="append", default=[],
                         help="a ChatGPT or Claude.ai export (zip or conversations.json); repeatable")
+    parser.add_argument("--from-hstry", type=Path, default=None, metavar="DB",
+                        help="an hstry database to read (default: ~/.local/share/hstry/hstry.db when it exists)")
     parser.add_argument("--no-backup", action="store_true", help="skip the raw backup and read history in place")
     parser.add_argument("--index-assistant", action="store_true", help="also index assistant replies")
     sub = parser.add_subparsers(dest="command")
