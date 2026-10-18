@@ -223,7 +223,8 @@ def report(run_dir: Path, split: str = "test") -> str:
     if not any(arm == "control" for arm, _ in groups):
         hint = ("--skill NAME=\"Use when …\"" if task.kind == "triggers" else "--text \"one plain line\"")
         raise ValueError(f"a report needs a control arm: `aihistory optimize arm --run {run_dir.name} control {hint}`, then evaluate it")
-    title = "Skill trigger evaluation" if task.kind == "triggers" else f"Rule evaluation: section \"{config['section']}\""
+    title = {"triggers": "Skill trigger evaluation", "gskill": "gskill evaluation"}.get(
+        task.kind, f"Rule evaluation: section \"{config.get('section')}\"")
     headers = [name for name, _ in task.columns([])]
     lines = [f"# {title}: {run_dir.name} ({split} split)", "",
              "| Arm | Agent | Runs | Score | " + " | ".join(headers) + " | Right by majority | Cost (USD) |",
@@ -254,6 +255,9 @@ def report(run_dir: Path, split: str = "test") -> str:
                     failures[(r["arm"], failure)] = failures.get((r["arm"], failure), 0) + 1
         if failures:
             lines += ["", "## Failed checks", ""] + [f"- {arm}: {name} ({count}×)" for (arm, name), count in sorted(failures.items())]
+    if task.kind == "gskill" and (shapes := gskill_shapes(config)):
+        lines += ["", f"Warning: the `gepa` skill describes the bug generator ({', '.join(shapes)}). It may have learned how "
+                  "these tasks were made rather than anything about your repository; read it before you trust its score."]
     if errors := len(rows) - len(scored):
         lines += ["", f"{errors} runs ended in an agent error and are not scored; `eval` retries them."]
     lines += ["", "Read this with care: a small test split rarely shows a significant difference, and in earlier trials "
@@ -262,6 +266,12 @@ def report(run_dir: Path, split: str = "test") -> str:
     text = "\n".join(lines) + "\n"
     write_private_text(run_dir / "REPORT.md", text)
     return text
+
+
+def gskill_shapes(config: dict) -> list[str]:
+    from .gskill import generator_shapes
+
+    return generator_shapes((config["arms"].get("gepa") or {}).get("skill", ""))
 
 
 def create_rule_run(out_dir: Path, name: str, instructions: Path, section: str, scenarios: Path) -> Path:
@@ -284,14 +294,20 @@ def create_rule_run(out_dir: Path, name: str, instructions: Path, section: str, 
     return run_dir
 
 
-def set_rule_arm(run_dir: Path, arm: str, text: str | None) -> None:
+def set_text_arm(run_dir: Path, arm: str, text: str | None) -> None:
+    """A rule run's section text, or a gskill run's skill, for one arm."""
     config = load_config(run_dir)
-    if config.get("kind") != "rule":
-        raise ValueError("--text sets a rule run's section; for skill descriptions use --skill NAME=text")
-    if arm in ("present", "removed"):
-        raise ValueError(f"`{arm}` is fixed: it is your file {'as it is' if arm == 'present' else 'without the section'}")
-    config["arms"][arm] = {"section": text}
+    kind = config.get("kind", "triggers")
+    fixed = {"rule": ("present", "removed"), "gskill": ("baseline",)}.get(kind)
+    if fixed is None:
+        raise ValueError("--text sets a rule run's section or a gskill run's skill; for skill descriptions use --skill NAME=text")
+    if arm in fixed:
+        raise ValueError(f"`{arm}` is fixed in a {kind} run")
+    config["arms"][arm] = {"section": text} if kind == "rule" else {"skill": text or ""}
     save_config(run_dir, config)
+
+
+set_rule_arm = set_text_arm
 
 
 def parse_assignments(values: list[str]) -> dict[str, str]:

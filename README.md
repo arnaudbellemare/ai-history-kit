@@ -117,6 +117,27 @@ aihistory optimize report --run commit-rule
 - **`optimize train` works on rule runs too.** GEPA rewrites the section from the failed checks, and the result is the arm `gepa`.
 - **Safety: the agent runs real commands here.** Claude Code may use only the tools a scenario lists in `allow` (for example `Bash(git:*)`), in a temporary folder outside your repositories. Git and the checks run without inherited `GIT_*` variables. If a scenario allows broad commands, run the evaluation in a container or VM.
 
+### Learn a repository skill (gskill, Python repositories)
+
+Can a skill file (CLAUDE.md or AGENTS.md) make your agent better at fixing bugs in your repository? gskill turns your repository into bug-fix tasks and compares no skill, your one-line control, and a GEPA-learned skill on tasks GEPA never saw.
+
+```bash
+aihistory optimize gskill --run myrepo --repo ~/code/myrepo --test-cmd "python -m pytest -q -rA" --k 3
+aihistory optimize arm    --run myrepo control --text "Run the whole test suite and fix every failure before you stop."
+aihistory optimize eval   --run myrepo --agent fake               # checks the setup; spends nothing
+aihistory optimize train  --run myrepo --budget 60                # GEPA learns the arm `gepa` from train and val
+aihistory optimize eval   --run myrepo --arms baseline,control,gepa
+aihistory optimize report --run myrepo
+```
+
+- **Tasks.** The kit copies your repository (never changing it) and mutates non-test modules: flipped comparisons, and/or swaps, negated ifs, off-by-one constants, flipped boolean returns, +/- swaps, removed statements. A mutation becomes a bug when it breaks between 1 and `--max-f2p` tests that passed before.
+- **Splits.** Each bug goes into exactly one of test, val and train. Tasks combine `--k` bugs from different files, since single bugs are usually too easy to tell skills apart.
+- **The task prompt says what done means:** every test that passed before passes again. It also lists tests that failed from the start. In an earlier trial, most of the gain came from stating this clearly, so measure your control before trusting a learned skill.
+- **Grading** puts the pristine test files back first, so editing a test never counts as a fix. A run ends as `all_passed`, `f2p_failed`, `bugged_file_untouched`, or `p2p_regression`.
+- **A learned skill that describes the bug generator** ("check for off-by-one constants…") gets a warning in the report: it may have learned how the tasks were made, not your repository.
+- **Time and spend.** `init` runs your test suite once per candidate mutation and once per combined task. With a 7-second suite, 16 candidates took about 3 minutes. Each evaluation is a full agent session with up to 40 turns.
+- **Safety.** The agent may read, edit, and run only your test command plus a few read-only shell commands, in a temporary copy of your repository. It still runs mutated code: use a container or VM for anything you wouldn't run on your machine.
+
 ## What's in `~/AI-History`
 
 | Path | What it is |
