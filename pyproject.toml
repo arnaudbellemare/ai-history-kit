@@ -10,6 +10,10 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 dependencies = []
+
+[project.optional-dependencies]
+# `aihistory optimize train`. gepa 0.1.4 supports Python 3.10 to 3.14.
+optimize = ["gepa==0.1.4; python_version < '3.15'"]
 keywords = ["claude-code", "codex", "chatgpt", "agent-memory", "personal-ai", "privacy"]
 
 [project.scripts]

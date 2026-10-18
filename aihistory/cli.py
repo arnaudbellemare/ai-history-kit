@@ -10,7 +10,7 @@
     aihistory memories                # memory candidates -> memories/REVIEW.md
     aihistory agent-me push [--apply] # send ticked memories to a local Agent-Me
     aihistory verify                  # re-check every backed-up file
-    aihistory optimize mine|label|arm|eval|report --run NAME   # test skill descriptions
+    aihistory optimize mine|label|arm|eval|report|train --run NAME   # test skill descriptions
 
 An hstry database (~/.local/share/hstry/hstry.db, or --from-hstry DB) is read too, which
 adds every tool hstry imports. So are agent-trace stores (.agent-traces in any folder your
@@ -192,6 +192,17 @@ def cmd_optimize(args):
         print(json.dumps(result))
     elif args.optimize_command == "report":
         print(experiment.report(run_dir, args.split))
+    elif args.optimize_command == "train":
+        from .optimize import gepa_train
+
+        agent = agents.make_agent(args.agent, args.model)
+        result = gepa_train.train(run_dir, agent, budget=args.budget, runs=args.runs,
+                                  reflection_model=args.reflection_model, workers=args.workers,
+                                  max_runs=args.max_runs, yes=args.yes, log=print,
+                                  on_plan=lambda n: print(f"Up to {n} agent runs planned with {experiment.agent_label(agent)}."))
+        print(json.dumps(result))
+        print(f"The best descriptions are now the arm `gepa`. Compare them on the test split: "
+              f"aihistory optimize eval --run {args.run} --arms original,control,gepa")
     return 0
 
 
@@ -265,7 +276,16 @@ def main(argv=None) -> int:
     evaluate.add_argument("--yes", action="store_true")
     report = optimize_sub.add_parser("report", help="accuracy per arm and paired tests -> REPORT.md")
     report.add_argument("--split", default="test", choices=("train", "val", "test"))
-    for command in (mine, label, arm, evaluate, report):
+    train = optimize_sub.add_parser("train", help="GEPA rewrites the descriptions (needs the [optimize] extra)")
+    train.add_argument("--agent", default="claude-code", choices=("claude-code", "codex", "fake"))
+    train.add_argument("--model", help="the agent's model (default: sonnet for Claude Code)")
+    train.add_argument("--budget", type=int, default=100, help="GEPA metric calls (one prompt each)")
+    train.add_argument("--runs", type=int, default=2, help="agent runs per metric call")
+    train.add_argument("--reflection-model", default="sonnet", help="the claude -p model that writes rewrites")
+    train.add_argument("--workers", type=int, default=4)
+    train.add_argument("--max-runs", type=int, default=200, help="refuse larger trainings without --yes")
+    train.add_argument("--yes", action="store_true")
+    for command in (mine, label, arm, evaluate, report, train):
         command.add_argument("--run", required=True, help="the run's name (a folder under <out>/optimize)")
     args = parser.parse_args(argv)
     handlers = {"run": cmd_run, "scan": cmd_scan, "backup": cmd_backup, "normalize": cmd_normalize, "index": cmd_index,

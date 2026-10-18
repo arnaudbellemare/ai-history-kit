@@ -72,6 +72,17 @@ aihistory optimize eval  --run triggers --split test        # Claude Code (Sonne
 aihistory optimize report --run triggers
 ```
 
+To let GEPA rewrite the descriptions, install the optional extra (gepa 0.1.4 runs on Python 3.10 to 3.14), train on the train and validation splits, then compare all three arms on the test split:
+
+```bash
+uv tool install --python 3.14 "ai-history-kit[optimize] @ git+https://github.com/arnaudbellemare/ai-history-kit"
+aihistory optimize train --run triggers --budget 60 --runs 2     # the best rewrite becomes the arm `gepa`
+aihistory optimize eval  --run triggers --arms original,control,gepa
+aihistory optimize report --run triggers
+```
+
+GEPA sees only the train and validation prompts. Its rewrites come from `claude -p` with no tools or MCP servers (`--reflection-model`, default Sonnet), never from gepa's default model. A training run makes up to `budget × runs` agent runs, plus one reflection call per rewrite.
+
 - **Prompts come from you.** `mine` offers three kinds of message you wrote: the one just before a target skill was loaded, ones that mention your keywords, and a random draw as likely negatives. Subagent briefs, headless runs and injected text are never offered. You label every prompt; no model does.
 - **The agent sees your real menu.** Your other skills are installed as stub decoys in a throwaway workspace, so a target skill competes the way it does in your sessions. A run counts as right when the agent loads only correct skills, or none when none is right.
 - **Claude Code runs with no side effects:** project settings only, no MCP servers, no saved session, and edit, shell and web tools denied. Codex (`--agent codex`, `codex exec --ephemeral` in a read-only sandbox) is experimental: check one run by hand before trusting its scores.

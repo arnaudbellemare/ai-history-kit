@@ -1,4 +1,5 @@
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -123,6 +124,62 @@ class OptimizeTests(unittest.TestCase):
                              "--arms", "original,control", "--runs", "1"), 0)
         self.assertEqual(run("--out", str(self.out), "optimize", "report", "--run", run_dir.name), 0)
         self.assertIn("| control | fake:fake |", (run_dir / "REPORT.md").read_text())
+
+
+try:
+    import gepa  # noqa: F401  (optional: pip install 'ai-history-kit[optimize]')
+except ImportError:
+    gepa = None
+
+
+@unittest.skipUnless(gepa, "needs the optional gepa package (Python 3.10 to 3.14)")
+class TrainTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.out = Path(self.tmp.name) / "out"
+        self.run_dir = experiment.create_run(self.out, "g", targets={"demo": "Builds demos."},
+                                             decoys={"other": "Unrelated work."})
+        split = {"train": [example("p1", "please build a demo of the parser", ["demo"], "pos:demo"),
+                           example("p3", "a short demo for the sales call", ["demo"], "pos:demo"),
+                           example("n1", "rename this variable", [], "neg")],
+                 "val": [example("p2", "make me a quick demo video", ["demo"], "pos:demo"),
+                         example("n3", "fix the flaky login check", [], "neg")],
+                 "test": [example("t1", "HELD-OUT-MARKER demo request", ["demo"], "pos:demo")]}
+        (self.run_dir / "dataset.json").write_text(json.dumps(split))
+        self.reflections = []
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def reflector(self, prompt):
+        self.reflections.append(prompt)
+        return "```\nskill: demo\nUse when the user asks for a demo.\n```"
+
+    def test_gepa_tunes_an_arm_with_the_kits_own_reflector(self):
+        from aihistory.optimize import gepa_train
+
+        result = gepa_train.train(self.run_dir, agents.FakeAgent(), budget=12, runs=1, reflector=self.reflector, workers=1)
+        self.assertTrue(self.reflections, "the kit's reflector was asked for a rewrite")
+        self.assertNotIn("litellm", sys.modules, "gepa's default reflection model (through litellm) is never used")
+        self.assertEqual(experiment.load_config(self.run_dir)["arms"]["gepa"], {"demo": "Use when the user asks for a demo."})
+        self.assertGreater(result["best_val_score"], result["seed_val_score"])
+
+    def test_training_never_sees_the_test_split(self):
+        from aihistory.optimize import gepa_train
+
+        gepa_train.train(self.run_dir, agents.FakeAgent(), budget=12, runs=1, reflector=self.reflector, workers=1)
+        self.assertFalse(any("HELD-OUT-MARKER" in prompt for prompt in self.reflections))
+        rows = experiment.rollouts(self.run_dir)
+        self.assertTrue(rows)
+        self.assertEqual({r["split"] for r in rows}, {"train", "val"})
+        self.assertNotIn("t1", {r["id"] for r in rows})
+
+    def test_a_training_budget_over_the_limit_needs_yes(self):
+        from aihistory.optimize import gepa_train
+
+        with self.assertRaisesRegex(ValueError, "agent runs planned"):
+            gepa_train.train(self.run_dir, agents.FakeAgent(), budget=100, runs=3, reflector=self.reflector, max_runs=200)
+        self.assertFalse(self.reflections)
 
 
 if __name__ == "__main__":
