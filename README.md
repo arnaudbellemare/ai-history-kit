@@ -63,8 +63,8 @@ Does your agent load the right skill for the prompts you actually write, and doe
 
 ```bash
 cd ~/my-project    # project skills are found from the folder you run in
-aihistory optimize mine  --run triggers --skill deploy --skill review --keywords deploy=release,ship
-#   label ~/AI-History/optimize/triggers/LABEL.md (tick the right skill for each prompt)
+aihistory optimize mine  --run triggers --skill deploy --skill review --keywords deploy=release,ship --generate 8 --judge codex
+#   check ~/AI-History/optimize/triggers/LABEL.md (fix pre-filled labels, tick `I checked this`)
 aihistory optimize label --run triggers
 aihistory optimize arm   --run triggers control --skill deploy="Use when the user asks to deploy or release."
 aihistory optimize eval  --run triggers --agent fake        # checks the setup; spends nothing
@@ -83,7 +83,16 @@ aihistory optimize report --run triggers
 
 GEPA sees only the train and validation prompts. Its rewrites come from `claude -p` with no tools or MCP servers (`--reflection-model`, default Sonnet), never from gepa's default model. A training run makes up to `budget × runs` agent runs, plus one reflection call per rewrite.
 
-- **Prompts come from you.** `mine` offers three kinds of message you wrote: the one just before a target skill was loaded, ones that mention your keywords, and a random draw as likely negatives. Subagent briefs, headless runs and injected text are never offered. You label every prompt; no model does.
+- **Prompts come from you, with labels pre-filled where there's evidence.** `mine` offers messages you wrote: ones a target skill was loaded for, ones that mention your keywords, and a random draw as likely negatives. Subagent briefs, headless runs and injected text are never offered. Each pre-filled label says where it came from:
+  - `history:accepted`: the agent loaded the skill and you carried on;
+  - `history:interrupted` or `history:corrected`: you stopped it, so loading was probably wrong;
+  - `history:missed-then-invoked`: nothing loaded, then you invoked the skill yourself;
+  - `history:invoked`: you invoked it with a request, which becomes the prompt;
+  - `--generate N`: a model writes N should-load and N near-miss prompts per skill from the skill's instructions;
+  - `--judge codex`: a model labels the rest. Codex is another model family than Claude, so it's less likely to share the agent's habits.
+
+  The generator and the judge see each skill's instructions without its frontmatter, never the description you're testing. They send those instructions, and for the judge your prompts, to their provider. `mine` counts the calls first, and more than `--max-calls` (default 30) needs `--yes`.
+- **You confirm; only confirmed labels are tested.** In `LABEL.md`, prompts that most need a look come first: sources that disagree, a judge that was unsure, a random sample for checking the pre-fills, and generated prompts. Fix what's wrong and tick `I checked this`. Only checked prompts go into the test split; unchecked pre-fills may still train. `REPORT.md` shows how often you kept each source's pre-fill.
 - **The agent sees your real menu.** Your other skills are installed as stub decoys in a throwaway workspace, so a target skill competes the way it does in your sessions. A run counts as right when the agent loads only correct skills, or none when none is right.
 - **Claude Code runs with no side effects:** project settings only, no MCP servers, no saved session, and edit, shell and web tools denied. Codex (`--agent codex`, `codex exec --ephemeral` in a read-only sandbox) is experimental: check one run by hand before trusting its scores.
 - **Every run is an agent-trace session** under `optimize/<run>/traces/`, scored from its events. Claude Code and Codex are judged the same way, and you can read back exactly what the agent did. Import, hash verification and replay are [checked against real agent-strace](docs/agent-strace-compatibility.md). Kit-only run results such as exit codes live in `annotations.jsonl`.

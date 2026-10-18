@@ -4,7 +4,9 @@ The first target is skill trigger descriptions: does the agent load the right sk
 prompt you actually wrote? The steps:
 
 1. `mine`: candidate prompts from your own history, with the skill each one led to;
-2. `label`: you tick the right answers in LABEL.md, which becomes train/val/test splits;
+2. `label`: you check the pre-filled labels in LABEL.md (each says where it came from: your
+   history, a generated prompt, or a judge) and tick `I checked this`; only checked labels go
+   into the test split;
 3. `eval`: a headless agent runs every prompt against each arm of descriptions;
 4. `report`: accuracy per arm against a hand-written control, with McNemar tests.
 

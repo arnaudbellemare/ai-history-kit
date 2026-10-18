@@ -192,19 +192,35 @@ def cmd_optimize(args):
     run_dir = experiment.run_path(out, args.run)
     if args.optimize_command == "mine":
         home = args.home or Path.home()
-        menu = experiment.find_skills(experiment.skill_roots(home, Path.cwd()) + [Path(d).expanduser() for d in args.skills_dir])
+        roots = experiment.skill_roots(home, Path.cwd()) + [Path(d).expanduser() for d in args.skills_dir]
+        menu = experiment.find_skills(roots)
         targets = {agents.safe_name(s): menu.get(agents.safe_name(s)) for s in args.skill}
         experiment.create_run(out, args.run, targets, decoys=None if args.no_decoys else menu)
         keywords = {k: v.split(",") for k, v in experiment.parse_assignments(args.keywords).items()}
-        dataset.mine(out, args.run, args.skill, keywords, negatives=args.negatives, run_dir=run_dir)
+        from .optimize.textmodels import make_text_model
+
+        def plan(calls, judged):
+            if calls:
+                print(f"{calls} model calls planned: {'generating prompts from skill instructions; ' if args.generate else ''}"
+                      f"{f'sending {judged} prompts you wrote to {args.judge} for judging' if judged else 'no judging'}.")
+
+        dataset.mine(out, args.run, args.skill, keywords, negatives=args.negatives, run_dir=run_dir,
+                     skill_files=experiment.find_skill_files(roots), generate=args.generate,
+                     generator=make_text_model(args.generator, args.generator_model) if args.generate else None,
+                     judge=make_text_model(args.judge, args.judge_model) if args.judge != "none" else None,
+                     audit=args.audit, max_calls=args.max_calls, yes=args.yes, on_plan=plan)
         missing = [t for t, d in targets.items() if not d]
-        print(f"Wrote {run_dir / 'LABEL.md'}: label it, then `aihistory optimize label --run {args.run}`.")
+        print(f"Wrote {run_dir / 'LABEL.md'}: check the pre-filled labels, tick `I checked this` on each prompt you "
+              f"checked, then `aihistory optimize label --run {args.run}`.")
         if missing:
             print(f"No SKILL.md found for {', '.join(missing)}; set their current text with "
                   f"`aihistory optimize arm --run {args.run} original --skill NAME=...`.")
     elif args.optimize_command == "label":
         split = dataset.apply_labels(run_dir, test=args.test, val=args.val)
-        print(json.dumps({name: len(part) for name, part in split.items()}))
+        audit = json.loads((run_dir / "dataset.json").read_text()).get("label_audit") or {}
+        print(json.dumps({"splits": {name: len(part) for name, part in split.items()},
+                          "confirmed": sum(e["confirmed"] for part in split.values() for e in part),
+                          "pre-fills you checked, kept or changed by source": audit}))
     elif args.optimize_command == "arm":
         if bool(args.skill) == (args.text is not None):
             raise ValueError("give --skill NAME=text (skill triggers) or --text (a rule section), not both")
@@ -290,6 +306,16 @@ def main(argv=None) -> int:
     mine.add_argument("--negatives", type=int, default=40, help="random messages of yours to offer as likely negatives")
     mine.add_argument("--skills-dir", action="append", default=[], help="another folder of skills for the menu")
     mine.add_argument("--no-decoys", action="store_true", help="evaluate without your other skills on the menu")
+    mine.add_argument("--generate", type=int, default=0, metavar="N",
+                      help="also have a model write N should-load and N near-miss prompts per skill from its instructions")
+    mine.add_argument("--generator", default="claude", choices=("claude", "codex", "fake"))
+    mine.add_argument("--generator-model")
+    mine.add_argument("--judge", default="none", choices=("none", "codex", "claude", "fake"),
+                      help="a model labels prompts the history doesn't (codex is another model family than Claude)")
+    mine.add_argument("--judge-model")
+    mine.add_argument("--audit", type=float, default=0.1, help="share of pre-filled prompts flagged for a random check")
+    mine.add_argument("--max-calls", type=int, default=30, help="refuse more model calls than this without --yes")
+    mine.add_argument("--yes", action="store_true")
     label = optimize_sub.add_parser("label", help="LABEL.md -> train/val/test splits")
     label.add_argument("--test", type=float, default=0.4)
     label.add_argument("--val", type=float, default=0.2)

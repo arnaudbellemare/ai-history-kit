@@ -78,6 +78,15 @@ def find_skills(roots: list[Path]) -> dict[str, str]:
     return found
 
 
+def find_skill_files(roots: list[Path]) -> dict[str, Path]:
+    """{name: SKILL.md path}, the first of a name winning, as in find_skills."""
+    found = {}
+    for root in roots:
+        for path in sorted(root.glob("*/SKILL.md")) if root.is_dir() else []:
+            found.setdefault(safe_name(path.parent.name), path)
+    return found
+
+
 def run_path(out_dir: Path, name: str) -> Path:
     return out_dir / "optimize" / safe_name(name)
 
@@ -135,7 +144,8 @@ def load_split(run_dir: Path, split: str) -> list[dict]:
         raise ValueError("no dataset yet; label LABEL.md and run `aihistory optimize label`")
     data = json.loads(path.read_text(encoding="utf-8")).get(split) or []
     if not data:
-        raise ValueError(f"the {split} split is empty; label more prompts in LABEL.md")
+        hint = " and tick `I checked this` on the ones you checked; only those go into the test split" if split == "test" else ""
+        raise ValueError(f"the {split} split is empty; label more prompts in LABEL.md{hint}")
     return data
 
 
@@ -258,6 +268,13 @@ def report(run_dir: Path, split: str = "test") -> str:
     if task.kind == "gskill" and (shapes := gskill_shapes(config)):
         lines += ["", f"Warning: the `gepa` skill describes the bug generator ({', '.join(shapes)}). It may have learned how "
                   "these tasks were made rather than anything about your repository; read it before you trust its score."]
+    dataset_file = run_dir / "dataset.json"
+    audit = json.loads(dataset_file.read_text(encoding="utf-8")).get("label_audit") if dataset_file.is_file() else None
+    if audit and task.kind == "triggers":
+        lines += ["", "## Pre-filled labels you checked", "", "How often each source's pre-fill survived your check. "
+                  "A source you often changed is a weak label for the prompts you did not check.", "",
+                  "| Source | Kept | Changed |", "|---|---|---|"]
+        lines += [f"| {source} | {t['kept']} | {t['changed']} |" for source, t in sorted(audit.items())]
     if errors := len(rows) - len(scored):
         lines += ["", f"{errors} runs ended in an agent error and are not scored; `eval` retries them."]
     lines += ["", "Read this with care: a small test split rarely shows a significant difference, and in earlier trials "
