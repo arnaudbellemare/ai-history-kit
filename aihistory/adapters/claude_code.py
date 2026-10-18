@@ -13,8 +13,8 @@ import json
 import re
 from pathlib import Path
 
-from . import clip
 from ..util import json_lines
+from . import clip
 
 HARNESS_TEXT = re.compile(
     r"\s*(?:<(?:task-notification|system-reminder|local-command-stdout|local-command-stderr|"
@@ -62,7 +62,7 @@ def read_session(path: Path, root: Path) -> dict | None:
     subagent = path.name.startswith("agent-") or "subagents" in path.parts
     events, identity, title, workspace = [], None, None, None
     created = updated = None
-    entrypoints = {}
+    entrypoints = set()
     stats = {"thinking_blocks": 0, "thinking_with_text": 0, "skills_offered": 0, "skill_calls": []}
     for row in json_lines(path):
         kind = row.get("type")
@@ -79,7 +79,7 @@ def read_session(path: Path, root: Path) -> dict | None:
         workspace = workspace or row.get("cwd")
         subagent = subagent or bool(row.get("isSidechain"))
         if row.get("entrypoint"):
-            entrypoints[row["entrypoint"]] = entrypoints.get(row["entrypoint"], 0) + 1
+            entrypoints.add(row["entrypoint"])
         stamp = row.get("timestamp")
         created = created or stamp
         updated = stamp or updated
@@ -121,8 +121,9 @@ def read_session(path: Path, root: Path) -> dict | None:
         "updated_at": updated,
         "subagent": subagent,
         # `claude -p` / SDK runs are usually scripts; their prompts are kept and searchable
-        # but don't become memories.
-        "headless": bool(entrypoints) and max(entrypoints, key=entrypoints.get).startswith("sdk"),
+        # but don't become memories. Any SDK evidence wins over interactive rows
+        # in a resumed or mixed transcript; row counts do not establish authorship.
+        "headless": any(entrypoint.startswith("sdk") for entrypoint in entrypoints),
         "origin": path.relative_to(root).as_posix(),
         "workspace": workspace,
         "events": events,

@@ -106,6 +106,13 @@ class Backup:
         """Consistent copy of a live SQLite database, skipped when unchanged since the last one."""
         stat = database.stat()
         source_stat = {"size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
+        # SQLite commits can update only the WAL while the main file stays put.
+        # Include it in the freshness check so live imports are not skipped.
+        try:
+            wal_stat = database.with_name(database.name + "-wal").stat()
+            source_stat["wal"] = {"size": wal_stat.st_size, "mtime_ns": wal_stat.st_mtime_ns}
+        except FileNotFoundError:
+            source_stat["wal"] = None
         prefix = f"{area}/{database.stem}/"
         if any(p.startswith(prefix) and e.get("source_stat") == source_stat for p, e in self.catalog["files"].items()):
             self._count("snapshot_unchanged")
