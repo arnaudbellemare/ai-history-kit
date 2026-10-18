@@ -98,14 +98,24 @@ class KitTests(unittest.TestCase):
         for path in (self.out / "corpus").glob("*.jsonl"):
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
 
-    def test_token_style_names_are_redacted_but_counts_are_not(self):
+    def test_credentials_named_with_any_prefix_are_redacted(self):
         from aihistory.redact import Redactor
 
         redactor = Redactor("/nonexistent")
-        for leaked in ("token=" + FAKE_SECRET, "GITHUB_TOKEN=" + FAKE_SECRET, "client_secret: " + FAKE_SECRET):
-            self.assertNotIn(FAKE_SECRET, redactor.text(leaked), leaked)
-        for harmless in ("max_tokens=8192", "token_count: 12345678", "tokens=12345678"):
-            self.assertEqual(redactor.text(harmless), harmless)
+        for name in ("token", "GITHUB_TOKEN", "client_secret", "DATABASE_PASSWORD", "STRIPE_API_KEY",
+                     "AWS_SECRET_ACCESS_KEY"):
+            with self.subTest(name=name):
+                self.assertEqual(redactor.text(f"{name}={FAKE_SECRET}"), f"{name}=[redacted]",
+                                 "credential value survived redaction")
+
+    def test_settings_that_only_mention_tokens_or_secrets_are_kept(self):
+        from aihistory.redact import Redactor
+
+        redactor = Redactor("/nonexistent")
+        for harmless in ("max_tokens=128000000", "token_count: 123456789", "tokens=12345678",
+                         "tokenizer=cl100k_base", "password_reset_url=https://example.com/reset"):
+            with self.subTest(text=harmless):
+                self.assertEqual(redactor.text(harmless), harmless, "a non-secret setting was redacted")
 
     def test_report_and_search(self):
         self.run_all()
