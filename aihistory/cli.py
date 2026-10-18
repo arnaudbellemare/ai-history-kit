@@ -165,6 +165,19 @@ def cmd_optimize(args):
     from .optimize import agents, dataset, experiment
 
     out = _out(args)
+    if args.optimize_command == "rule":
+        from .optimize import rules
+
+        if args.rule_command == "example":
+            print(json.dumps(rules.EXAMPLE, indent=1))
+            return 0
+        run_dir = experiment.create_rule_run(out, args.run, Path(args.file).expanduser(), args.section,
+                                             Path(args.scenarios).expanduser())
+        split = json.loads((run_dir / "dataset.json").read_text())
+        print(f"Rule run {run_dir.name}: scenarios {', '.join(f'{k} {len(v)}' for k, v in split.items())}. "
+              f"Arms present and removed are set; add a control with "
+              f"`aihistory optimize arm --run {args.run} control --text \"one plain line\"`.")
+        return 0
     run_dir = experiment.run_path(out, args.run)
     if args.optimize_command == "mine":
         home = args.home or Path.home()
@@ -182,11 +195,18 @@ def cmd_optimize(args):
         split = dataset.apply_labels(run_dir, test=args.test, val=args.val)
         print(json.dumps({name: len(part) for name, part in split.items()}))
     elif args.optimize_command == "arm":
-        experiment.set_arm(run_dir, args.arm, experiment.parse_assignments(args.skill))
+        if bool(args.skill) == (args.text is not None):
+            raise ValueError("give --skill NAME=text (skill triggers) or --text (a rule section), not both")
+        if args.text is not None:
+            experiment.set_rule_arm(run_dir, args.arm, args.text)
+        else:
+            experiment.set_arm(run_dir, args.arm, experiment.parse_assignments(args.skill))
         print(f"Arm `{args.arm}` set.")
     elif args.optimize_command == "eval":
         agent = agents.make_agent(args.agent, args.model)
-        result = experiment.evaluate(run_dir, agent, args.split, args.arms.split(","), runs=args.runs,
+        kind = experiment.load_config(run_dir).get("kind", "triggers")
+        arms = args.arms or ("present,removed,control" if kind == "rule" else "original,control")
+        result = experiment.evaluate(run_dir, agent, args.split, arms.split(","), runs=args.runs,
                                      workers=args.workers, max_runs=args.max_runs, yes=args.yes,
                                      on_plan=lambda n: print(f"{n} agent runs planned with {experiment.agent_label(agent)}."))
         print(json.dumps(result))
@@ -264,10 +284,11 @@ def main(argv=None) -> int:
     label.add_argument("--val", type=float, default=0.2)
     arm = optimize_sub.add_parser("arm", help="set an arm's descriptions, e.g. the control")
     arm.add_argument("arm")
-    arm.add_argument("--skill", action="append", required=True, metavar="NAME=text")
+    arm.add_argument("--skill", action="append", default=[], metavar="NAME=text", help="a skill description (trigger runs)")
+    arm.add_argument("--text", help="the section's text for this arm (rule runs)")
     evaluate = optimize_sub.add_parser("eval", help="run the agent on a split, for each arm")
     evaluate.add_argument("--split", default="test", choices=("train", "val", "test"))
-    evaluate.add_argument("--arms", default="original,control")
+    evaluate.add_argument("--arms", help="comma-separated (default: original,control; for a rule run present,removed,control)")
     evaluate.add_argument("--agent", default="claude-code", choices=("claude-code", "codex", "fake"))
     evaluate.add_argument("--model", help="the agent's model (default: sonnet for Claude Code)")
     evaluate.add_argument("--runs", type=int, default=3, help="runs per prompt per arm")
@@ -285,6 +306,14 @@ def main(argv=None) -> int:
     train.add_argument("--workers", type=int, default=4)
     train.add_argument("--max-runs", type=int, default=200, help="refuse larger trainings without --yes")
     train.add_argument("--yes", action="store_true")
+    rule = optimize_sub.add_parser("rule", help="test a section of your CLAUDE.md or AGENTS.md on scenarios")
+    rule_sub = rule.add_subparsers(dest="rule_command", required=True)
+    rule_sub.add_parser("example", help="print an example scenarios file")
+    init = rule_sub.add_parser("init", help="start a rule run")
+    init.add_argument("--run", required=True)
+    init.add_argument("--file", required=True, help="your CLAUDE.md or AGENTS.md")
+    init.add_argument("--section", required=True, help="the heading of the section under test")
+    init.add_argument("--scenarios", required=True, help="a scenarios JSON file (see `optimize rule example`)")
     for command in (mine, label, arm, evaluate, report, train):
         command.add_argument("--run", required=True, help="the run's name (a folder under <out>/optimize)")
     args = parser.parse_args(argv)

@@ -1,8 +1,10 @@
 """Agents that run one prompt in a throwaway workspace and record it as an agent-trace session.
 
-- ClaudeCodeAgent: `claude -p` with project settings only, no MCP servers, no saved session,
-  and edit/shell/web tools denied, so a trigger evaluation has no side effects.
-- CodexAgent (experimental): `codex exec --json --ephemeral` in a read-only sandbox. Codex
+- ClaudeCodeAgent: `claude -p` with project settings only, no MCP servers, and no saved
+  session. A trigger evaluation denies edit, shell, and web tools, so it has no side effects; a
+  rule scenario allows only the tools it lists (such as `Bash(git:*)`), inside its scratch repo.
+- CodexAgent (experimental): `codex exec --json --ephemeral`, sandboxed read-only (or
+  workspace-write for a rule scenario). Codex
   loads repository skills from `.agents/skills/`; check one run by hand before trusting scores.
 - FakeAgent: loads the skill whose description shares the most words with the prompt. For tests
   and for dry runs that check a setup without spending anything.
@@ -25,6 +27,7 @@ from .traces import TraceWriter, from_claude_stream, from_codex_jsonl
 
 STUB = "Stub body for a trigger evaluation. Reply with the single word LOADED and stop.\n"
 DENIED_TOOLS = ("Bash", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch", "Task")
+WEB_TOOLS = ("WebFetch", "WebSearch", "Task")
 
 
 def safe_name(name: str) -> str:
@@ -79,21 +82,25 @@ class ClaudeCodeAgent:
         if instructions:
             (workspace / self.instructions_file).write_text(instructions, encoding="utf-8")
 
-    def command(self) -> list[str]:
+    def command(self, permissions: dict | None = None) -> list[str]:
+        turns = (permissions or {}).get("max_turns", self.max_turns)
         command = [self.executable, "-p", "--model", self.model, "--setting-sources", "project",
-                   "--output-format", "stream-json", "--verbose", "--max-turns", str(self.max_turns),
+                   "--output-format", "stream-json", "--verbose", "--max-turns", str(turns),
                    "--no-session-persistence", "--strict-mcp-config"]
         if self.thinking:  # readable reasoning summaries in headless runs, used as side information
             command += ["--thinking-display", "summarized"]
+        if permissions:  # only the listed tools; print mode denies everything else
+            return command + ["--allowedTools", *permissions["allow"], "--disallowedTools", *WEB_TOOLS]
         return command + ["--disallowedTools", *self.denied_tools]
 
-    def run(self, workspace: Path, prompt: str, writer: TraceWriter) -> RunResult:
+    def run(self, workspace: Path, prompt: str, writer: TraceWriter, permissions: dict | None = None) -> RunResult:
         started = time.monotonic()
+        timeout = (permissions or {}).get("timeout", self.timeout)
         writer.event("user_prompt", {"prompt": prompt})
-        code, stdout, stderr = _run(self.command(), workspace, prompt, self.timeout)
+        code, stdout, stderr = _run(self.command(permissions), workspace, prompt, timeout)
         if code and self.thinking and "thinking-display" in stderr:
             self.thinking = False  # an older Claude Code without the flag
-            code, stdout, stderr = _run(self.command(), workspace, prompt, self.timeout)
+            code, stdout, stderr = _run(self.command(permissions), workspace, prompt, timeout)
         summary = from_claude_stream(stdout.splitlines(), writer)
         if code:
             writer.event("error", {"error": stderr[-500:] or f"exit {code}"})
@@ -111,12 +118,13 @@ class CodexAgent:
         if instructions:
             (workspace / self.instructions_file).write_text(instructions, encoding="utf-8")
 
-    def run(self, workspace: Path, prompt: str, writer: TraceWriter) -> RunResult:
+    def run(self, workspace: Path, prompt: str, writer: TraceWriter, permissions: dict | None = None) -> RunResult:
         started = time.monotonic()
         writer.event("user_prompt", {"prompt": prompt})
+        sandbox = "workspace-write" if (permissions or {}).get("write") else "read-only"
         command = [self.executable, "exec", "--json", "--ephemeral", "--skip-git-repo-check", "--ignore-user-config",
-                   "--sandbox", "read-only"] + (["--model", self.model] if self.model else []) + ["--", prompt]
-        code, stdout, stderr = _run(command, workspace, None, self.timeout)
+                   "--sandbox", sandbox] + (["--model", self.model] if self.model else []) + ["--", prompt]
+        code, stdout, stderr = _run(command, workspace, None, (permissions or {}).get("timeout", self.timeout))
         from_codex_jsonl(stdout.splitlines(), writer)
         if code:
             writer.event("error", {"error": stderr[-500:] or f"exit {code}"})
@@ -145,7 +153,7 @@ class FakeAgent:
             found[path.parent.name] = json.loads(line[len("description: "):]) if line else ""
         return found
 
-    def run(self, workspace: Path, prompt: str, writer: TraceWriter) -> RunResult:
+    def run(self, workspace: Path, prompt: str, writer: TraceWriter, permissions: dict | None = None) -> RunResult:
         writer.event("user_prompt", {"prompt": prompt})
         writer.event("session_start", {"provider": "fake"})
         overlap = {name: len(_words(prompt) & _words(description)) for name, description in self._skills(workspace).items()}
