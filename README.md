@@ -42,10 +42,20 @@ aihistory --export ~/Downloads/chatgpt-export.zip --export ~/Downloads/claude-ex
 ## Search
 
 ```bash
-aihistory search "postgres migration"
+aihistory search postgres migration          # every word; "migrations" matches too
+aihistory search '"write tests"' -kite       # an exact phrase, without "kite"
+aihistory search 'deploy OR release' 'migrat*'
+aihistory search source:codex after:2026-09-01 before:2026-10-01 worktree
+aihistory search --json "pre-commit"         # for scripts and agents
 ```
 
-By default only your own messages are indexed. Add `--index-assistant` to `run` or `index` to include replies.
+- **Fallbacks:** if nothing has every word, search shows messages with any of them, then messages that contain the text as a substring ("ailboa" finds "sailboat"). Last, it tries a spelling correction from your own vocabulary ("postgress" finds "postgres").
+- **Filters:** `source:`, `role:`, `workspace:` (the folder the agent ran in), `after:` and `before:`. Each also works as a flag, such as `--source codex`.
+- **Context:** each hit ends with `(CONVERSATION --at N)`. `aihistory show CONVERSATION --at N` prints the messages around it, each labelled by who wrote it (`user`, `assistant`, `harness`, `agent`, `tool`).
+
+By default only your own messages are indexed. Add `--index-assistant` to `run` or `index` to include replies. After upgrading, run `aihistory index` once to rebuild the index.
+
+If search across many tools is your main need, [hstry](https://github.com/byteowlz/hstry) is stronger: query modes, more filters, and an HTTP and MCP interface. This index searches only the words you wrote, labelled.
 
 ## What's in `~/AI-History`
 
@@ -54,7 +64,7 @@ By default only your own messages are indexed. Add `--index-assistant` to `run` 
 | `REPORT.md` | What was found, date coverage and gaps, skill and thinking stats, next steps |
 | `raw/` + `CATALOG.json` | Verified copies of the original files. Re-running adds new and grown sessions and never deletes |
 | `corpus/*.jsonl` | Cleaned conversations, one file per source, secrets redacted |
-| `index.sqlite3` | Full-text index for `aihistory search` |
+| `index.sqlite3` | Full-text index for `aihistory search` and `show` |
 | `memories/REVIEW.md`, `candidates.json` | Memory candidates waiting for your review |
 
 All files are created readable only by you (mode 0600).

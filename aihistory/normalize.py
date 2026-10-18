@@ -71,6 +71,7 @@ def normalize(sources: list[Source], out_dir: Path, home: Path | None = None) ->
                     event["text"] = redactor.text(event["text"])
                 record["title"] = redactor.text(record["title"]) if record.get("title") else None
                 record["origin"] = redactor.text(record["origin"])
+                record["workspace"] = redactor.text(record["workspace"]) if record.get("workspace") else None
                 digest = sha256_text(json.dumps(record["events"], sort_keys=True))
                 key = (record["identity"], digest)
                 if key in seen:
@@ -98,9 +99,15 @@ def normalize(sources: list[Source], out_dir: Path, home: Path | None = None) ->
             "warning_count": len(warnings)}
 
 
-def read_corpus(out_dir: Path):
+def read_corpus_offsets(out_dir: Path):
+    """(corpus file name, byte offset of the record's line, record) for every record."""
     for path in sorted((out_dir / "corpus").glob("*.jsonl")):
-        with open(path, encoding="utf-8") as handle:
-            for line in handle:
+        with open(path, "rb") as handle:
+            while line := handle.readline():
                 if line.strip():
-                    yield json.loads(line)
+                    yield path.name, handle.tell() - len(line), json.loads(line)
+
+
+def read_corpus(out_dir: Path):
+    for _, _, record in read_corpus_offsets(out_dir):
+        yield record
