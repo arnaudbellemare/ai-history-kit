@@ -12,6 +12,7 @@ import tempfile
 import threading
 from pathlib import Path
 
+from . import gskill
 from .checks import run_checks, snapshot
 from .rules import DEFAULT_ALLOW, init_git, section_body, strip_label, with_section, write_files
 from .scorers import side_info, skills_loaded, trigger_score
@@ -168,5 +169,77 @@ class RuleTask:
                 ("Outcome checks", [1.0 if r.get("outcome") else 0.0 for r in rows])]
 
 
+GSKILL_TEMPLATE = """You are helping a coding agent learn a skill file (CLAUDE.md or AGENTS.md) for fixing bugs in one repository. Each task gives the agent a short bug report (how many tests now fail, and one failure excerpt); the agent must fix the source without touching tests. A run passes only when every test that passed before passes again.
+
+Current skill (it may be empty):
+```
+<curr_param>
+```
+
+Results from recent runs: the task, how it ended, the tests still failing, the agent's tool calls, and the score:
+```
+<side_info>
+```
+
+Write an improved skill: concrete, reusable guidance about this repository and about working through such tasks (where code lives, how to run and read the tests, what finishing means). Generalize; do not describe individual bugs or how they were made. Return the full skill inside a single ``` block."""
+
+
+class GskillTask:
+    kind, base_arm, template = "gskill", "baseline", GSKILL_TEMPLATE
+
+    def __init__(self, config: dict):
+        self.config, self.base = config, Path(config["base"])
+        self.venv = Path(config["venv"]) if config.get("venv") else None
+        self.base_pass = set(config["base_pass"])
+
+    def payload(self, arm: str) -> dict:
+        arms = self.config["arms"]
+        if arm not in arms:
+            raise ValueError(f"no arm `{arm}` in this run (arms: {', '.join(arms)})")
+        return {"skill": (arms[arm].get("skill") or "").strip()}
+
+    def permissions(self, example: dict) -> dict:
+        return {"allow": gskill.allowed_tools(self.config["test_command"]), "write": True, "max_turns": 40, "timeout": 480}
+
+    def setup(self, agent, payload: dict, example: dict) -> tuple[Path, None]:
+        folder = Path(tempfile.mkdtemp(prefix="aihistory-gskill-run-"))
+        gskill.copy_tree(self.base, folder, self.venv)
+        for relative, source in example["mutated_files"].items():
+            (folder / relative).write_text(source, encoding="utf-8")
+        agent.prepare(folder, {}, gskill.skill_document(payload["skill"]))
+        return folder, None
+
+    def score(self, example: dict, events: list[dict], workspace: Path, before) -> tuple[float, dict]:
+        result = gskill.grade(workspace, example, self.base, self.config["test_command"], self.base_pass, self.config["tests"])
+        return (1.0 if result["status"] == "all_passed" else 0.0), result
+
+    def release(self, workspace: Path) -> None:
+        shutil.rmtree(workspace, ignore_errors=True)
+
+    def finish(self) -> None:
+        pass
+
+    def seed_candidate(self) -> dict[str, str]:
+        return {"skill": self.payload(self.base_arm)["skill"]}
+
+    def candidate_payload(self, candidate: dict) -> dict:
+        return {"skill": (candidate.get("skill") or "").strip()}
+
+    def candidate_arm(self, candidate: dict) -> dict:
+        return {"skill": (candidate.get("skill") or "").strip()}
+
+    def side_info(self, example: dict, events: list[dict], details: dict) -> dict:
+        calls = [f"{e.get('tool')}: {e['text'][:160]}" for e in events if e.get("kind") == "tool_call"]
+        replies = [e["text"] for e in events if e.get("kind") == "message" and e.get("role") == "assistant"]
+        return {"Task": example["prompt"][:600], "Status": details.get("status"), "Still failing": details.get("still_failing"),
+                "Regressions": details.get("regressions"), "Test output": details.get("test_output", "")[:600],
+                "Tool calls": calls[:45], "Agent final text": (replies[-1] if replies else "")[:400]}
+
+    def columns(self, rows: list[dict]) -> list[tuple[str, list[float]]]:
+        return [("All tests pass", [r["score"] for r in rows]),
+                ("Regressions", [1.0 if r.get("status") == "p2p_regression" else 0.0 for r in rows])]
+
+
 def make_task(config: dict):
-    return RuleTask(config) if config.get("kind") == "rule" else TriggerTask(config)
+    kind = config.get("kind", "triggers")
+    return {"rule": RuleTask, "gskill": GskillTask}.get(kind, TriggerTask)(config)

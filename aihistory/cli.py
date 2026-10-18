@@ -178,6 +178,17 @@ def cmd_optimize(args):
               f"Arms present and removed are set; add a control with "
               f"`aihistory optimize arm --run {args.run} control --text \"one plain line\"`.")
         return 0
+    if args.optimize_command == "gskill":
+        from .optimize import gskill
+
+        run_dir = gskill.init_run(out, args.run, Path(args.repo).expanduser(), args.test_cmd,
+                                  Path(args.venv).expanduser() if args.venv else None, args.tests or None,
+                                  args.source or None, k=args.k, candidates=args.candidates, max_f2p=args.max_f2p,
+                                  workers=args.workers, on_progress=print)
+        split = json.loads((run_dir / "dataset.json").read_text())
+        print(f"gskill run {run_dir.name}: tasks {', '.join(f'{k} {len(v)}' for k, v in split.items())}. "
+              f"Add a control with `aihistory optimize arm --run {args.run} control --text \"one line\"`.")
+        return 0
     run_dir = experiment.run_path(out, args.run)
     if args.optimize_command == "mine":
         home = args.home or Path.home()
@@ -198,14 +209,14 @@ def cmd_optimize(args):
         if bool(args.skill) == (args.text is not None):
             raise ValueError("give --skill NAME=text (skill triggers) or --text (a rule section), not both")
         if args.text is not None:
-            experiment.set_rule_arm(run_dir, args.arm, args.text)
+            experiment.set_text_arm(run_dir, args.arm, args.text)
         else:
             experiment.set_arm(run_dir, args.arm, experiment.parse_assignments(args.skill))
         print(f"Arm `{args.arm}` set.")
     elif args.optimize_command == "eval":
         agent = agents.make_agent(args.agent, args.model)
         kind = experiment.load_config(run_dir).get("kind", "triggers")
-        arms = args.arms or ("present,removed,control" if kind == "rule" else "original,control")
+        arms = args.arms or {"rule": "present,removed,control", "gskill": "baseline,control"}.get(kind, "original,control")
         result = experiment.evaluate(run_dir, agent, args.split, arms.split(","), runs=args.runs,
                                      workers=args.workers, max_runs=args.max_runs, yes=args.yes,
                                      on_plan=lambda n: print(f"{n} agent runs planned with {experiment.agent_label(agent)}."))
@@ -285,7 +296,7 @@ def main(argv=None) -> int:
     arm = optimize_sub.add_parser("arm", help="set an arm's descriptions, e.g. the control")
     arm.add_argument("arm")
     arm.add_argument("--skill", action="append", default=[], metavar="NAME=text", help="a skill description (trigger runs)")
-    arm.add_argument("--text", help="the section's text for this arm (rule runs)")
+    arm.add_argument("--text", help="this arm's section text (rule runs) or skill (gskill runs)")
     evaluate = optimize_sub.add_parser("eval", help="run the agent on a split, for each arm")
     evaluate.add_argument("--split", default="test", choices=("train", "val", "test"))
     evaluate.add_argument("--arms", help="comma-separated (default: original,control; for a rule run present,removed,control)")
@@ -314,6 +325,17 @@ def main(argv=None) -> int:
     init.add_argument("--file", required=True, help="your CLAUDE.md or AGENTS.md")
     init.add_argument("--section", required=True, help="the heading of the section under test")
     init.add_argument("--scenarios", required=True, help="a scenarios JSON file (see `optimize rule example`)")
+    skill = optimize_sub.add_parser("gskill", help="make bug-fix tasks from a Python repository, to learn a repo skill")
+    skill.add_argument("--run", required=True)
+    skill.add_argument("--repo", required=True, help="the repository to copy (it is never changed)")
+    skill.add_argument("--test-cmd", required=True, help="e.g. 'python -m pytest -q -rA' or 'python -m unittest -v'")
+    skill.add_argument("--venv", help="a virtualenv to link into each copy as .venv (for a test command using .venv/bin/python)")
+    skill.add_argument("--tests", action="append", default=[], help=f"test file globs (default: {', '.join(['test_*.py', 'tests/*', '...'])})")
+    skill.add_argument("--source", action="append", default=[], help="only mutate files matching these globs")
+    skill.add_argument("--k", type=int, default=3, help="bugs per task (single bugs are often too easy)")
+    skill.add_argument("--candidates", type=int, default=200, help="mutations to try")
+    skill.add_argument("--max-f2p", type=int, default=20, help="most tests a kept bug may break")
+    skill.add_argument("--workers", type=int, default=4)
     for command in (mine, label, arm, evaluate, report, train):
         command.add_argument("--run", required=True, help="the run's name (a folder under <out>/optimize)")
     args = parser.parse_args(argv)
