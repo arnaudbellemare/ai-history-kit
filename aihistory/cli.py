@@ -10,7 +10,7 @@
     aihistory memories                # memory candidates -> memories/REVIEW.md
     aihistory agent-me push [--apply] # send ticked memories to a local Agent-Me
     aihistory verify                  # re-check every backed-up file
-    aihistory optimize mine|label|arm|eval|report|train --run NAME   # test skill descriptions
+    aihistory optimize mine|review|label|arm|eval|report|train --run NAME   # test skill descriptions
 
 An hstry database (~/.local/share/hstry/hstry.db, or --from-hstry DB) is read too, which
 adds every tool hstry imports. So are agent-trace stores (.agent-traces in any folder your
@@ -215,6 +215,13 @@ def cmd_optimize(args):
         if missing:
             print(f"No SKILL.md found for {', '.join(missing)}; set their current text with "
                   f"`aihistory optimize arm --run {args.run} original --skill NAME=...`.")
+    elif args.optimize_command == "review":
+        from .optimize import review
+
+        result = review.review(run_dir, everything=args.all)
+        print(f"\n{result['checked_this_session']} checked this session; {result['checked']} checked in all, "
+              f"{result['unchecked']} still unchecked ({result['unchecked_flagged']} of them flagged). "
+              f"When you're done, run `aihistory optimize label --run {args.run}`.")
     elif args.optimize_command == "label":
         split = dataset.apply_labels(run_dir, test=args.test, val=args.val)
         audit = json.loads((run_dir / "dataset.json").read_text()).get("label_audit") or {}
@@ -319,6 +326,8 @@ def main(argv=None) -> int:
     label = optimize_sub.add_parser("label", help="LABEL.md -> train/val/test splits")
     label.add_argument("--test", type=float, default=0.4)
     label.add_argument("--val", type=float, default=0.2)
+    review_cmd = optimize_sub.add_parser("review", help="confirm pre-filled labels one prompt at a time from the keyboard")
+    review_cmd.add_argument("--all", action="store_true", help="also show prompts you already checked")
     arm = optimize_sub.add_parser("arm", help="set an arm's descriptions, e.g. the control")
     arm.add_argument("arm")
     arm.add_argument("--skill", action="append", default=[], metavar="NAME=text", help="a skill description (trigger runs)")
@@ -362,7 +371,7 @@ def main(argv=None) -> int:
     skill.add_argument("--candidates", type=int, default=200, help="mutations to try")
     skill.add_argument("--max-f2p", type=int, default=20, help="most tests a kept bug may break")
     skill.add_argument("--workers", type=int, default=4)
-    for command in (mine, label, arm, evaluate, report, train):
+    for command in (mine, review_cmd, label, arm, evaluate, report, train):
         command.add_argument("--run", required=True, help="the run's name (a folder under <out>/optimize)")
     args = parser.parse_args(argv)
     handlers = {"run": cmd_run, "scan": cmd_scan, "backup": cmd_backup, "normalize": cmd_normalize, "index": cmd_index,
