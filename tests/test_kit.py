@@ -13,7 +13,8 @@ from pathlib import Path
 from aihistory import agentme, cli, index
 from aihistory.backup import Backup
 from aihistory.normalize import read_corpus
-from tests.fixtures import make_home
+from tests.fixtures import FAKE_SECRET, make_home
+from tests.hstry_fixture import make_hstry_db
 
 try:
     from compression import zstd  # Python 3.14+
@@ -97,6 +98,15 @@ class KitTests(unittest.TestCase):
         for path in (self.out / "corpus").glob("*.jsonl"):
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
 
+    def test_token_style_names_are_redacted_but_counts_are_not(self):
+        from aihistory.redact import Redactor
+
+        redactor = Redactor("/nonexistent")
+        for leaked in ("token=" + FAKE_SECRET, "GITHUB_TOKEN=" + FAKE_SECRET, "client_secret: " + FAKE_SECRET):
+            self.assertNotIn(FAKE_SECRET, redactor.text(leaked), leaked)
+        for harmless in ("max_tokens=8192", "token_count: 12345678", "tokens=12345678"):
+            self.assertEqual(redactor.text(harmless), harmless)
+
     def test_report_and_search(self):
         self.run_all()
         report = (self.out / "REPORT.md").read_text()
@@ -151,6 +161,49 @@ class KitTests(unittest.TestCase):
             target.write_bytes(subprocess.run(["zstd", "-q", "-c"], input=data, capture_output=True, check=True).stdout)
         self.run_all()
         self.assertIn("dark mode", self.memories())
+
+
+class HstryTests(unittest.TestCase):
+    """Reading an hstry database adds every tool hstry supports."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = make_home(Path(self.tmp.name) / "home")
+        self.db = make_hstry_db(self.home / ".local/share/hstry/hstry.db", FAKE_SECRET)
+        self.out = Path(self.tmp.name) / "out"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def records(self):
+        return [r for r in read_corpus(self.out) if r["source"].startswith("hstry:")]
+
+    def test_default_database_is_found_and_read_with_kit_attribution(self):
+        self.assertEqual(run("--home", str(self.home), "--out", str(self.out), "run"), 0)
+        cursor = next(r for r in self.records() if r["source"] == "hstry:cursor")
+        roles = [(e["role"], e["text"][:24]) for e in cursor["events"] if e["kind"] == "message"]
+        self.assertIn(("harness", "<system-reminder>Follow "), roles, "harness text in an hstry user turn is not the owner's")
+        self.assertIn("edit_file", [e.get("tool") for e in cursor["events"]])
+        corpus = (self.out / "corpus" / "hstry.jsonl").read_text()
+        self.assertNotIn(FAKE_SECRET, corpus, "hstry stores secrets as-is; the kit redacts them")
+        candidates = [c["content"] for c in json.loads((self.out / "memories" / "candidates.json").read_text())["candidates"]]
+        self.assertIn("vim keybindings", candidates)
+        self.assertNotIn("a rocket", candidates, "a dispatched worker thread's prompt is not the owner's")
+
+    def test_sessions_the_native_reader_has_are_skipped_but_history_only_hstry_kept_is_not(self):
+        self.assertEqual(run("--home", str(self.home), "--out", str(self.out), "run"), 0)
+        titles = {r.get("title") for r in self.records() if r["source"] == "hstry:claude-code"}
+        self.assertEqual(titles, {"deleted from disk since"})
+
+    def test_an_explicit_path_and_bad_databases(self):
+        moved = make_hstry_db(Path(self.tmp.name) / "elsewhere.db", FAKE_SECRET)
+        self.db.unlink()
+        self.assertEqual(run("--home", str(self.home), "--out", str(self.out), "--from-hstry", str(moved), "run"), 0)
+        self.assertTrue(self.records())
+        self.assertEqual(run("--home", str(self.home), "--out", str(self.out), "--from-hstry", str(self.tmp.name) + "/missing.db", "scan"), 2)
+        broken = Path(self.tmp.name) / "broken.db"
+        broken.write_bytes(b"not a database at all" * 100)
+        self.assertEqual(run("--home", str(self.home), "--out", str(self.out), "--from-hstry", str(broken), "scan"), 2)
 
 
 class AgentMeTests(unittest.TestCase):

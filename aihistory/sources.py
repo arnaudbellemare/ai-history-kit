@@ -50,9 +50,15 @@ def export_kind(path: Path) -> str | None:
     return None
 
 
-def discover(home: Path | None = None, exports: list[Path] | None = None) -> list[Source]:
+def discover(home: Path | None = None, exports: list[Path] | None = None, hstry: Path | None = None) -> list[Source]:
+    from .adapters import hstry as hstry_adapter
+
     home = home or Path.home()
     found = []
+    hstry_db = hstry or (home / hstry_adapter.DEFAULT_DB)
+    if hstry is not None or hstry_db.is_file():
+        hstry_adapter.open_db(hstry_db).close()  # fail early and clearly on a missing or foreign file
+        found.append(Source("hstry", hstry_db.parent, [hstry_db]))
     claude = home / ".claude" / "projects"
     if claude.is_dir():
         found.append(Source("claude-code", claude, _files(claude, "*.jsonl")))
@@ -96,6 +102,10 @@ def coverage(source: Source) -> dict:
         info["subagent_files"] = sum(1 for p in source.files if p.name.startswith("agent-"))
     if source.kind == "codex":
         info["compressed_files"] = sum(1 for p in source.files if p.name.endswith(".zst"))
+    if source.kind == "hstry":
+        from .adapters.hstry import conversation_count
+
+        info["conversations"] = sum(conversation_count(p) for p in source.files)
     if days and source.kind in ("claude-code", "codex"):
         info["first_day"], info["last_day"] = days[0].isoformat(), days[-1].isoformat()
         present, missing, day = set(days), [], days[0]

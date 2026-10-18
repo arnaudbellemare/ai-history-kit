@@ -99,11 +99,11 @@ class Backup:
         self._count(outcome)
         return outcome
 
-    def snapshot_sqlite(self, database: Path, label: str) -> str:
+    def snapshot_sqlite(self, database: Path, label: str, area: str = "raw/codex/db") -> str:
         """Consistent copy of a live SQLite database, skipped when unchanged since the last one."""
         stat = database.stat()
         source_stat = {"size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
-        prefix = f"raw/codex/db/{database.stem}/"
+        prefix = f"{area}/{database.stem}/"
         if any(p.startswith(prefix) and e.get("source_stat") == source_stat for p, e in self.catalog["files"].items()):
             self._count("snapshot_unchanged")
             return "unchanged"
@@ -152,6 +152,8 @@ def back_up(sources: list[Source], root: Path) -> dict:
                 backup.place(path, f"raw/codex/sessions/{m[1]}/{m[2]}/{m[3]}/{path.name}", label)
             elif source.kind == "codex-db":
                 backup.snapshot_sqlite(path, label)
+            elif source.kind == "hstry":
+                backup.snapshot_sqlite(path, label, area="raw/hstry")
             else:
                 backup.place(path, f"raw/exports/{source.kind}/{path.name}", label)
         backup.save()
@@ -167,6 +169,10 @@ def backed_up_sources(root: Path) -> list[Source]:
     codex = root / "raw" / "codex" / "sessions"
     if codex.is_dir():
         found.append(Source("codex", codex, sorted(p for p in codex.rglob("rollout-*") if CODEX_ROLLOUT.match(p.name))))
+    hstry = root / "raw" / "hstry"
+    snapshots = sorted(hstry.glob("*/*/*.db")) if hstry.is_dir() else []
+    if snapshots:  # the newest snapshot holds everything hstry had at that time
+        found.append(Source("hstry", snapshots[-1].parent, [snapshots[-1]]))
     exports = root / "raw" / "exports"
     for kind in ("chatgpt-export", "claude-export"):
         folder = exports / kind

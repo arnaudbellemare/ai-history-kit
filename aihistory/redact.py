@@ -16,7 +16,9 @@ SENSITIVE_KEYS = {
 PATTERNS = (
     ("private_key", re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----.*?-----END (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----", re.DOTALL), "[redacted:private_key]"),
     ("url_credentials", re.compile(r"\b(https?|postgres|postgresql|mysql|mongodb|redis)://([^\s/:@]+):([^\s/@]+)@"), r"\1://[redacted]@"),
-    ("credential_assignment", re.compile(r"(?i)\b(api[_-]?key|access[_-]?token|auth[_-]?token|password|passwd|secret)([\"']?\s*[:=]\s*)([\"']?)(?!\[redacted)([^\s\"',}\]]{8,})"), r"\1\2\3[redacted]"),
+    # Names ending in "token" (token, GITHUB_TOKEN, hf_token) or "secret"; "max_tokens" and
+    # "token_count" don't end in "token", and short values like 8192 fall under the 8-char minimum.
+    ("credential_assignment", re.compile(r"(?i)\b(api[_-]?key|\w*token|password|passwd|\w*secret)([\"']?\s*[:=]\s*)([\"']?)(?!\[redacted)([^\s\"',}\]]{8,})"), r"\1\2\3[redacted]"),
     ("bearer_token", re.compile(r"(?i)(Bearer\s+)(?!\[redacted)[A-Za-z0-9._~+/-]{16,}={0,2}"), r"\1[redacted]"),
     ("anthropic_key", re.compile(r"\bsk-ant-[A-Za-z0-9_-]{20,}\b"), "[redacted:anthropic_key]"),
     ("openai_key", re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"), "[redacted:openai_key]"),

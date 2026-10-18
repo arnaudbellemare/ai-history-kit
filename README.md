@@ -107,6 +107,12 @@ The backup only adds what's new, so run it on a schedule. On macOS or Linux, run
 | Codex | `~/.codex/sessions` and `archived_sessions`, `rollout-*.jsonl` and compressed `.jsonl.zst` (needs Python 3.14+ or the `zstd` command) |
 | Codex thread database | `~/.codex/thread_history_*.sqlite`, backed up as a consistent snapshot (not parsed) |
 | ChatGPT / Claude.ai | Official export zip or `conversations.json` via `--export` |
+| [hstry](https://github.com/byteowlz/hstry) | `~/.local/share/hstry/hstry.db` when it exists, or `--from-hstry DB`: adds every tool hstry imports (Cursor, OpenCode, Gemini CLI, Aider, Goose, Copilot, Cline, …) |
+
+**About hstry.** If you already use hstry, ai-history-kit reads its database read-only and backs it up as a consistent snapshot.
+- **Duplicates:** Claude Code and Codex conversations that this kit already read from disk are skipped. Ones only hstry still has, because the app has since deleted them, are kept.
+- **Attribution is a best guess for the other tools.** hstry doesn't record who wrote a message, so only known harness text and dispatched worker threads are separated from your words.
+- **Secrets:** hstry stores them as-is, and they're redacted here like everywhere else.
 
 ## Limits, honestly
 
