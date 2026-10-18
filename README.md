@@ -57,9 +57,9 @@ By default only your own messages are indexed. Add `--index-assistant` to `run` 
 
 If search across many tools is your main need, [hstry](https://github.com/byteowlz/hstry) is stronger: query modes, more filters, and an HTTP and MCP interface. This index searches only the words you wrote, labelled.
 
-## Test your skill descriptions (optional)
+## Test what steers your agent (optional)
 
-Does your agent load the right skill for the prompts you actually write? `aihistory optimize` measures it, with a hand-written control to compare against.
+Does your agent load the right skill for the prompts you actually write, and does a rule in your CLAUDE.md or AGENTS.md change what it does? `aihistory optimize` measures both, always against a hand-written control.
 
 ```bash
 cd ~/my-project    # project skills are found from the folder you run in
@@ -92,6 +92,30 @@ GEPA sees only the train and validation prompts. Its rewrites come from `claude 
   - an arm is evaluated on the test split once, so new descriptions need a new arm name;
   - `report` needs a control arm.
 - **Expect small effects.** In earlier trials, a one-line hand-written control explained most of what an automatic optimizer gained. With a few dozen test prompts, few differences are statistically significant. The report gives McNemar p-values so you can see that.
+
+### Test a rule in your CLAUDE.md or AGENTS.md
+
+Does a section of your instructions change what the agent does? A rule run gives the agent scenarios in a scratch repository, with that section present, removed, or replaced by your one-line control. It then checks what the agent did.
+
+```bash
+aihistory optimize rule example > scenarios.json   # a commit-hook scenario to adapt: prompt, files, checks
+aihistory optimize rule init --run commit-rule --file AGENTS.md --section "Commit Checks" --scenarios scenarios.json
+aihistory optimize arm   --run commit-rule control --text "Run the project's checks before every commit."
+aihistory optimize eval  --run commit-rule --agent fake    # checks the setup; spends nothing
+aihistory optimize eval  --run commit-rule                  # arms present, removed, control
+aihistory optimize report --run commit-rule
+```
+
+- **Each run starts fresh:** a new scratch repository holding the scenario's files and your instructions file in its first commit.
+- **Checks are deterministic** and read the run's trace and the repository afterwards:
+  - `ordered`: run A before B;
+  - `never`: never run C;
+  - `never_touch`: leave these files alone;
+  - `end_state`: a command that must succeed afterwards.
+
+  The report separates process checks (how the agent worked) from outcome checks (what it left behind), and lists every failed check. The agent's reasoning is never scored.
+- **`optimize train` works on rule runs too.** GEPA rewrites the section from the failed checks, and the result is the arm `gepa`.
+- **Safety: the agent runs real commands here.** Claude Code may use only the tools a scenario lists in `allow` (for example `Bash(git commit:*)`), in a temporary folder outside your repositories. Git and the checks run without inherited `GIT_*` variables. Name git subcommands rather than allowing `Bash(git:*)`, which would also permit `git config --global` or `git -C` on another repository. If a scenario allows broad commands, run the evaluation in a container or VM.
 
 ## What's in `~/AI-History`
 
