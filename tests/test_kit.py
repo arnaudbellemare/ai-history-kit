@@ -13,7 +13,9 @@ from pathlib import Path
 from aihistory import agentme, cli, index
 from aihistory.backup import Backup
 from aihistory.normalize import read_corpus
-from tests.fixtures import FAKE_SECRET, make_home
+from aihistory.sources import discover
+from tests.agent_trace_fixture import NATIVE_CLAUDE_ID, make_trace_store
+from tests.fixtures import FAKE_SECRET, make_home, user
 from tests.hstry_fixture import make_hstry_db
 
 try:
@@ -214,6 +216,78 @@ class HstryTests(unittest.TestCase):
         broken = Path(self.tmp.name) / "broken.db"
         broken.write_bytes(b"not a database at all" * 100)
         self.assertEqual(run("--home", str(self.home), "--out", str(self.out), "--from-hstry", str(broken), "scan"), 2)
+
+
+class AgentTraceTests(unittest.TestCase):
+    """agent-trace (agent-strace) stores add the tools its hooks capture, such as Gemini CLI and Cursor."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = make_home(Path(self.tmp.name) / "home")
+        self.project = Path(self.tmp.name) / "project"
+        self.store = make_trace_store(self.project, FAKE_SECRET)
+        native = self.home / ".claude" / "projects" / "-tmp-project" / f"{NATIVE_CLAUDE_ID}.jsonl"
+        native.parent.mkdir(parents=True)
+        row = {**user("already in the native transcript"), "sessionId": NATIVE_CLAUDE_ID, "cwd": str(self.project)}
+        native.write_text(json.dumps(row) + "\n", encoding="utf-8")
+        self.out = Path(self.tmp.name) / "out"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_kit(self, *args):
+        stdout = io.StringIO()
+        with redirect_stdout(stdout), redirect_stderr(io.StringIO()):
+            status = cli.main(["--home", str(self.home), "--out", str(self.out), "--agent-traces", str(self.project), *args])
+        return status, stdout.getvalue()
+
+    def records(self, source):
+        return [r for r in read_corpus(self.out) if r["source"] == source]
+
+    def test_a_trace_from_another_tool_is_read_with_kit_attribution(self):
+        self.assertEqual(self.run_kit("run")[0], 0)
+        main, child = sorted(self.records("agent-trace:gemini-cli"), key=lambda r: r["subagent"])
+        roles = [(e["role"], e["text"][:20]) for e in main["events"] if e["kind"] == "message"]
+        self.assertIn(("harness", "<system-reminder>Fol"), roles, "harness text in a traced prompt is not the owner's")
+        self.assertIn(("assistant", "Done: two spaces it "), roles)
+        self.assertIn("read_file", [e.get("tool") for e in main["events"]])
+        self.assertEqual([e["role"] for e in child["events"]], ["agent"], "a dispatched session's prompt is not the owner's")
+        self.assertNotIn(FAKE_SECRET, (self.out / "corpus" / "agent-trace.jsonl").read_text())
+        candidates = [c["content"] for c in json.loads((self.out / "memories" / "candidates.json").read_text())["candidates"]]
+        self.assertIn("two-space indents", candidates)
+        self.assertNotIn("a rocket", candidates)
+
+    def test_traces_of_sessions_the_native_reader_has_are_skipped(self):
+        self.assertEqual(self.run_kit("run")[0], 0)
+        prompts = {r["events"][0]["text"] for r in self.records("agent-trace:claude-code")}
+        self.assertEqual(prompts, {"only the trace still has this session"},
+                         "a hook trace keeps 16 characters of the native session id; that copy is a duplicate")
+
+    def test_a_tampered_trace_fails_verify(self):
+        self.assertEqual(self.run_kit("run")[0], 0)
+        self.assertEqual(self.run_kit("verify")[0], 0, "an intact hash chain verifies")
+        events = self.store / "gem0000000000001" / "events.ndjson"
+        events.write_text(events.read_text(encoding="utf-8").replace("two-space", "four-space"), encoding="utf-8")
+        self.assertEqual(self.run_kit("backup")[0], 0)
+        status, output = self.run_kit("verify")
+        self.assertEqual(status, 1, "an edited event breaks the hash chain")
+        self.assertIn("gem0000000000001", output)
+        self.assertIn("hash chain", output)
+
+    def test_a_tampered_trace_is_named_in_the_report(self):
+        events = self.store / "gem0000000000001" / "events.ndjson"
+        events.write_text(events.read_text(encoding="utf-8").replace("two-space", "four-space"), encoding="utf-8")
+        self.assertEqual(self.run_kit("--no-backup", "run")[0], 0)
+        report = (self.out / "REPORT.md").read_text(encoding="utf-8")
+        self.assertIn("broken hash chain", report)
+        self.assertIn("gem0000000000001", report)
+
+    def test_stores_are_found_in_project_folders_the_history_names(self):
+        self.assertIn(("agent-trace", self.store), {(s.kind, s.root) for s in discover(self.home)})
+        empty = Path(self.tmp.name) / "empty"
+        empty.mkdir()
+        with self.assertRaisesRegex(ValueError, "no agent-trace sessions"):
+            discover(self.home, agent_traces=[empty])
 
 
 class AgentMeTests(unittest.TestCase):

@@ -15,7 +15,7 @@ SKIP_NAMES = (".DS_Store",)
 
 @dataclass
 class Source:
-    kind: str  # claude-code | codex | codex-db | chatgpt-export | claude-export
+    kind: str  # claude-code | codex | codex-db | chatgpt-export | claude-export | hstry | agent-trace
     root: Path
     files: list[Path] = field(default_factory=list)
 
@@ -50,11 +50,58 @@ def export_kind(path: Path) -> str | None:
     return None
 
 
-def discover(home: Path | None = None, exports: list[Path] | None = None, hstry: Path | None = None) -> list[Source]:
+def _first_cwd(path: Path, max_lines: int) -> str | None:
+    try:
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            for _, line in zip(range(max_lines), handle):
+                try:
+                    row = json.loads(line) if line.strip() else {}
+                except json.JSONDecodeError:
+                    continue
+                cwd = (row.get("cwd") or (row.get("payload") or {}).get("cwd")) if isinstance(row, dict) else None
+                if isinstance(cwd, str) and cwd:
+                    return cwd
+    except OSError:
+        pass
+    return None
+
+
+def history_folders(home: Path) -> set[Path]:
+    """Folders the Claude Code and Codex history says agents ran in: one session file per Claude
+    project folder, and the first line of each uncompressed Codex rollout."""
+    folders = set()
+    claude = home / ".claude" / "projects"
+    for project in sorted(p for p in claude.iterdir() if p.is_dir()) if claude.is_dir() else []:
+        for path in sorted(project.glob("*.jsonl")):
+            if cwd := _first_cwd(path, 50):
+                folders.add(Path(cwd))
+                break
+    for folder in ("sessions", "archived_sessions"):
+        for path in _files(home / ".codex" / folder, "rollout-*.jsonl"):
+            if cwd := _first_cwd(path, 1):
+                folders.add(Path(cwd))
+    return folders
+
+
+def agent_trace_stores(home: Path, explicit: list[Path] | None = None) -> list[Path]:
+    """Stores named with --agent-traces, plus any .agent-traces folder in home or a history folder."""
+    from .adapters import agent_trace
+
+    stores = [agent_trace.open_store(path.expanduser()) for path in explicit or []]
+    for folder in sorted({home, *history_folders(home)}):
+        store = folder / agent_trace.STORE_NAME
+        if store not in stores and agent_trace.session_files(store):
+            stores.append(store)
+    return stores
+
+
+def discover(home: Path | None = None, exports: list[Path] | None = None, hstry: Path | None = None,
+             agent_traces: list[Path] | None = None) -> list[Source]:
+    from .adapters import agent_trace
     from .adapters import hstry as hstry_adapter
 
     home = home or Path.home()
-    found = []
+    found = [Source("agent-trace", store, agent_trace.session_files(store)) for store in agent_trace_stores(home, agent_traces)]
     hstry_db = hstry or (home / hstry_adapter.DEFAULT_DB)
     if hstry is not None or hstry_db.is_file():
         hstry_adapter.open_db(hstry_db).close()  # fail early and clearly on a missing or foreign file
@@ -91,6 +138,15 @@ def file_day(source: Source, path: Path) -> date | None:
                         return date.fromisoformat(stamp[:10])
         except (OSError, ValueError, json.JSONDecodeError):
             pass
+    if source.kind == "agent-trace":
+        from .adapters.agent_trace import session_meta
+        from .util import iso
+
+        started = iso(session_meta(path.parent).get("started_at"))
+        try:
+            return date.fromisoformat(started[:10]) if started else None
+        except ValueError:
+            pass
     return datetime.fromtimestamp(path.stat().st_mtime).date()
 
 
@@ -106,6 +162,8 @@ def coverage(source: Source) -> dict:
         from .adapters.hstry import conversation_count
 
         info["conversations"] = sum(conversation_count(p) for p in source.files)
+    if days and source.kind == "agent-trace":
+        info["first_day"], info["last_day"] = days[0].isoformat(), days[-1].isoformat()
     if days and source.kind in ("claude-code", "codex"):
         info["first_day"], info["last_day"] = days[0].isoformat(), days[-1].isoformat()
         present, missing, day = set(days), [], days[0]
