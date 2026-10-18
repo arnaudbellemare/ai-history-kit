@@ -10,6 +10,7 @@
     aihistory memories                # memory candidates -> memories/REVIEW.md
     aihistory agent-me push [--apply] # send ticked memories to a local Agent-Me
     aihistory verify                  # re-check every backed-up file
+    aihistory optimize mine|label|arm|eval|report --run NAME   # test skill descriptions
 
 An hstry database (~/.local/share/hstry/hstry.db, or --from-hstry DB) is read too, which
 adds every tool hstry imports. So are agent-trace stores (.agent-traces in any folder your
@@ -160,6 +161,40 @@ def cmd_agent_me(args):
     return 0
 
 
+def cmd_optimize(args):
+    from .optimize import agents, dataset, experiment
+
+    out = _out(args)
+    run_dir = experiment.run_path(out, args.run)
+    if args.optimize_command == "mine":
+        home = args.home or Path.home()
+        menu = experiment.find_skills(experiment.skill_roots(home, Path.cwd()) + [Path(d).expanduser() for d in args.skills_dir])
+        targets = {agents.safe_name(s): menu.get(agents.safe_name(s)) for s in args.skill}
+        experiment.create_run(out, args.run, targets, decoys=None if args.no_decoys else menu)
+        keywords = {k: v.split(",") for k, v in experiment.parse_assignments(args.keywords).items()}
+        dataset.mine(out, args.run, args.skill, keywords, negatives=args.negatives, run_dir=run_dir)
+        missing = [t for t, d in targets.items() if not d]
+        print(f"Wrote {run_dir / 'LABEL.md'}: label it, then `aihistory optimize label --run {args.run}`.")
+        if missing:
+            print(f"No SKILL.md found for {', '.join(missing)}; set their current text with "
+                  f"`aihistory optimize arm --run {args.run} original --skill NAME=...`.")
+    elif args.optimize_command == "label":
+        split = dataset.apply_labels(run_dir, test=args.test, val=args.val)
+        print(json.dumps({name: len(part) for name, part in split.items()}))
+    elif args.optimize_command == "arm":
+        experiment.set_arm(run_dir, args.arm, experiment.parse_assignments(args.skill))
+        print(f"Arm `{args.arm}` set.")
+    elif args.optimize_command == "eval":
+        agent = agents.make_agent(args.agent, args.model)
+        result = experiment.evaluate(run_dir, agent, args.split, args.arms.split(","), runs=args.runs,
+                                     workers=args.workers, max_runs=args.max_runs, yes=args.yes,
+                                     on_plan=lambda n: print(f"{n} agent runs planned with {experiment.agent_label(agent)}."))
+        print(json.dumps(result))
+    elif args.optimize_command == "report":
+        print(experiment.report(run_dir, args.split))
+    return 0
+
+
 def cmd_verify(args):
     problems = Backup(_out(args)).verify()
     print(json.dumps({"ok": not problems, "problems": problems}, indent=1))
@@ -204,9 +239,37 @@ def main(argv=None) -> int:
     agent_push.add_argument("--api", default="http://127.0.0.1:8000")
     agent_push.add_argument("--token-file", help="Agent-Me's private/personal.env (or set AGENT_ME_TOKEN)")
     agent_push.add_argument("--apply", action="store_true")
+    optimize = sub.add_parser("optimize", help="test (and tune) skill descriptions against prompts you wrote")
+    optimize_sub = optimize.add_subparsers(dest="optimize_command", required=True)
+    mine = optimize_sub.add_parser("mine", help="candidate prompts from your history -> LABEL.md")
+    mine.add_argument("--skill", action="append", required=True, help="a target skill; repeatable")
+    mine.add_argument("--keywords", action="append", default=[], metavar="SKILL=word,word",
+                      help="also offer your messages that mention these words")
+    mine.add_argument("--negatives", type=int, default=40, help="random messages of yours to offer as likely negatives")
+    mine.add_argument("--skills-dir", action="append", default=[], help="another folder of skills for the menu")
+    mine.add_argument("--no-decoys", action="store_true", help="evaluate without your other skills on the menu")
+    label = optimize_sub.add_parser("label", help="LABEL.md -> train/val/test splits")
+    label.add_argument("--test", type=float, default=0.4)
+    label.add_argument("--val", type=float, default=0.2)
+    arm = optimize_sub.add_parser("arm", help="set an arm's descriptions, e.g. the control")
+    arm.add_argument("arm")
+    arm.add_argument("--skill", action="append", required=True, metavar="NAME=text")
+    evaluate = optimize_sub.add_parser("eval", help="run the agent on a split, for each arm")
+    evaluate.add_argument("--split", default="test", choices=("train", "val", "test"))
+    evaluate.add_argument("--arms", default="original,control")
+    evaluate.add_argument("--agent", default="claude-code", choices=("claude-code", "codex", "fake"))
+    evaluate.add_argument("--model", help="the agent's model (default: sonnet for Claude Code)")
+    evaluate.add_argument("--runs", type=int, default=3, help="runs per prompt per arm")
+    evaluate.add_argument("--workers", type=int, default=4)
+    evaluate.add_argument("--max-runs", type=int, default=200, help="refuse larger evaluations without --yes")
+    evaluate.add_argument("--yes", action="store_true")
+    report = optimize_sub.add_parser("report", help="accuracy per arm and paired tests -> REPORT.md")
+    report.add_argument("--split", default="test", choices=("train", "val", "test"))
+    for command in (mine, label, arm, evaluate, report):
+        command.add_argument("--run", required=True, help="the run's name (a folder under <out>/optimize)")
     args = parser.parse_args(argv)
     handlers = {"run": cmd_run, "scan": cmd_scan, "backup": cmd_backup, "normalize": cmd_normalize, "index": cmd_index,
-                "search": cmd_search, "show": cmd_show, "memories": cmd_memories, "agent-me": cmd_agent_me, "verify": cmd_verify, None: cmd_run}
+                "search": cmd_search, "show": cmd_show, "memories": cmd_memories, "agent-me": cmd_agent_me, "verify": cmd_verify, "optimize": cmd_optimize, None: cmd_run}
     try:
         return handlers[args.command](args)
     except (ValueError, RuntimeError, FileNotFoundError) as error:

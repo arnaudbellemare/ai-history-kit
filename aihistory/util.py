@@ -52,6 +52,14 @@ def write_private_json(path: Path, value) -> None:
     write_private_text(path, json.dumps(value, indent=1, ensure_ascii=False, sort_keys=True) + "\n")
 
 
+def append_private_line(path: Path, line: str) -> None:
+    """Append one line to a file created with mode 0600."""
+    private_dir(path.parent)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    with os.fdopen(descriptor, "a", encoding="utf-8") as handle:
+        handle.write(line + "\n")
+
+
 @contextmanager
 def private_jsonl(path: Path):
     """Yield a writer for JSON lines; the file appears atomically, mode 0600, on success."""

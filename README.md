@@ -10,7 +10,7 @@ aihistory run
 
 Then open `~/AI-History/REPORT.md`.
 
-No dependencies beyond Python 3.10+. Nothing is uploaded anywhere.
+No dependencies beyond Python 3.10+. Nothing is uploaded anywhere. The one exception is `aihistory optimize eval`, which runs your own coding agent on prompts you choose, so those prompts go to that agent's provider, as they do when you use it.
 
 ## Why
 
@@ -57,6 +57,31 @@ By default only your own messages are indexed. Add `--index-assistant` to `run` 
 
 If search across many tools is your main need, [hstry](https://github.com/byteowlz/hstry) is stronger: query modes, more filters, and an HTTP and MCP interface. This index searches only the words you wrote, labelled.
 
+## Test your skill descriptions (optional)
+
+Does your agent load the right skill for the prompts you actually write? `aihistory optimize` measures it, with a hand-written control to compare against.
+
+```bash
+cd ~/my-project    # project skills are found from the folder you run in
+aihistory optimize mine  --run triggers --skill deploy --skill review --keywords deploy=release,ship
+#   label ~/AI-History/optimize/triggers/LABEL.md (tick the right skill for each prompt)
+aihistory optimize label --run triggers
+aihistory optimize arm   --run triggers control --skill deploy="Use when the user asks to deploy or release."
+aihistory optimize eval  --run triggers --agent fake        # checks the setup; spends nothing
+aihistory optimize eval  --run triggers --split test        # Claude Code (Sonnet), 3 runs per prompt
+aihistory optimize report --run triggers
+```
+
+- **Prompts come from you.** `mine` offers three kinds of message you wrote: the one just before a target skill was loaded, ones that mention your keywords, and a random draw as likely negatives. Subagent briefs, headless runs and injected text are never offered. You label every prompt; no model does.
+- **The agent sees your real menu.** Your other skills are installed as stub decoys in a throwaway workspace, so a target skill competes the way it does in your sessions. A run counts as right when the agent loads only correct skills, or none when none is right.
+- **Claude Code runs with no side effects:** project settings only, no MCP servers, no saved session, and edit, shell and web tools denied. Codex (`--agent codex`, `codex exec --ephemeral` in a read-only sandbox) is experimental: check one run by hand before trusting its scores.
+- **Every run is an agent-trace session** under `optimize/<run>/traces/`, scored from its events. Claude Code and Codex are judged the same way, and you can read back exactly what the agent did. The format follows agent-strace's source; the kit hasn't yet been checked against agent-strace itself.
+- **Guards:**
+  - every `eval` prints how many agent runs it plans, and more than `--max-runs` (default 200) needs `--yes`;
+  - an arm is evaluated on the test split once, so new descriptions need a new arm name;
+  - `report` needs a control arm.
+- **Expect small effects.** In earlier trials, a one-line hand-written control explained most of what an automatic optimizer gained. With a few dozen test prompts, few differences are statistically significant. The report gives McNemar p-values so you can see that.
+
 ## What's in `~/AI-History`
 
 | Path | What it is |
@@ -66,6 +91,7 @@ If search across many tools is your main need, [hstry](https://github.com/byteow
 | `corpus/*.jsonl` | Cleaned conversations, one file per source, secrets redacted |
 | `index.sqlite3` | Full-text index for `aihistory search` and `show` |
 | `memories/REVIEW.md`, `candidates.json` | Memory candidates waiting for your review |
+| `optimize/<run>/` | Optional: labelled prompts, arms, agent-trace sessions of every evaluation run, and its report |
 
 All files are created readable only by you (mode 0600).
 
