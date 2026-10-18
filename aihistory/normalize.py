@@ -7,10 +7,12 @@ from collections import Counter
 from pathlib import Path
 
 from . import SCHEMA
-from .adapters import claude_code, codex, exports, hstry
+from .adapters import agent_trace, claude_code, codex, exports, hstry
 from .redact import Redactor, residual_findings
 from .sources import Source
 from .util import ZstdUnavailable, private_jsonl, sha256_text, short_id
+
+DERIVED = ("hstry", "agent-trace")  # copies of other apps' sessions: read after the native readers
 
 
 def _records(source: Source, warnings: list[str]):
@@ -37,6 +39,11 @@ def _records(source: Source, warnings: list[str]):
     elif source.kind == "hstry":
         for path in source.files:
             yield from hstry.read_db(path)
+    elif source.kind == "agent-trace":
+        for path in source.files:
+            record = agent_trace.read_session(path, source.root)
+            if record:
+                yield record
 
 
 def normalize(sources: list[Source], out_dir: Path, home: Path | None = None) -> dict:
@@ -46,16 +53,18 @@ def normalize(sources: list[Source], out_dir: Path, home: Path | None = None) ->
     for source in sources:
         if source.kind != "codex-db":  # kept as a raw snapshot; its threads duplicate the rollouts
             by_kind.setdefault(source.kind, []).append(source)  # e.g. Codex sessions + archived_sessions
-    native_ids = set()  # conversations the native readers produced; hstry copies of them are skipped
-    for kind in sorted(by_kind, key=lambda k: k == "hstry"):
+    # "<kind>:<session id>" for every native conversation, plus the id's first 16 characters,
+    # which is all an agent-trace hook keeps. hstry and agent-trace copies of them are skipped.
+    native_keys = set()
+    for kind in sorted(by_kind, key=lambda k: k in DERIVED):
         group = by_kind[kind]
-        roles, seen = Counter(), set()
+        roles, seen, broken = Counter(), set(), []
         records = events = duplicates = residual = native_duplicates = 0
         target = out_dir / "corpus" / f"{kind}.jsonl"
         with private_jsonl(target) as write:
             for record in (r for source in group for r in _records(source, warnings)):
-                native = record.pop("native", None)
-                if native and short_id("conv", f"{native}:{record['identity']}") in native_ids:
+                native, identity = record.pop("native", None), record["identity"]
+                if native and f"{native}:{identity}" in native_keys:
                     native_duplicates += 1
                     continue
                 for event in record["events"]:
@@ -68,12 +77,14 @@ def normalize(sources: list[Source], out_dir: Path, home: Path | None = None) ->
                     duplicates += 1
                     continue
                 seen.add(key)
+                if ((record.get("stats") or {}).get("chain") or {}).get("status") == "broken":
+                    broken.append(record["origin"])
                 residual += bool(residual_findings(json.dumps(record["events"])))
                 record = {"schema": SCHEMA, "conversation_id": short_id("conv", f"{record['source']}:{record['identity']}"),
                           **{k: v for k, v in record.items() if k != "identity"}}
                 write(record)
                 if kind in ("claude-code", "codex"):
-                    native_ids.add(record["conversation_id"])
+                    native_keys.update({f"{kind}:{identity}", f"{kind}:{identity[:agent_trace.NATIVE_ID_PREFIX]}"})
                 records += 1
                 events += len(record["events"])
                 roles.update(e["role"] for e in record["events"])
@@ -81,6 +92,8 @@ def normalize(sources: list[Source], out_dir: Path, home: Path | None = None) ->
                                 "exact_duplicates_skipped": duplicates, "roles": dict(roles),
                                 "already_read_natively": native_duplicates,
                                 "records_with_residual_secret_patterns": residual}
+        if kind == "agent-trace":
+            summary[kind]["broken_hash_chains"] = broken
     return {"sources": summary, "redactions": dict(redactor.counts), "warnings": warnings[:20],
             "warning_count": len(warnings)}
 

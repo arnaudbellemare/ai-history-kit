@@ -20,8 +20,11 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote
 
+from .adapters import agent_trace
 from .sources import CODEX_ROLLOUT, Source
-from .util import CHUNK, private_dir, write_private_json
+from .util import CHUNK, private_dir, sha256_text, write_private_json
+
+TRACE_FILES = (agent_trace.EVENTS, "meta.json", "annotations.jsonl")
 
 
 def _hash(path: Path, prefix_bytes: int | None = None) -> tuple[str, str | None]:
@@ -137,6 +140,10 @@ class Backup:
                 problems[relative] = "missing"
             elif _hash(path)[0] != entry["sha256"]:
                 problems[relative] = "sha256 mismatch"
+            elif relative.startswith("raw/agent-trace/") and PurePosixPath(relative).name.startswith("events"):
+                chain = agent_trace.verify_chain(path)  # catches edits made before the copy, too
+                if chain["status"] == "broken":
+                    problems[relative] = f"hash chain broken at line {chain['line']}: {chain['reason']}"
         return problems
 
 
@@ -154,6 +161,11 @@ def back_up(sources: list[Source], root: Path) -> dict:
                 backup.snapshot_sqlite(path, label)
             elif source.kind == "hstry":
                 backup.snapshot_sqlite(path, label, area="raw/hstry")
+            elif source.kind == "agent-trace":
+                area = f"raw/agent-trace/{sha256_text(str(source.root))[:8]}/{path.parent.relative_to(source.root).as_posix()}"
+                for name in TRACE_FILES:
+                    if (path.parent / name).is_file():
+                        backup.place(path.parent / name, f"{area}/{name}", label)
             else:
                 backup.place(path, f"raw/exports/{source.kind}/{path.name}", label)
         backup.save()
@@ -173,6 +185,10 @@ def backed_up_sources(root: Path) -> list[Source]:
     snapshots = sorted(hstry.glob("*/*/*.db")) if hstry.is_dir() else []
     if snapshots:  # the newest snapshot holds everything hstry had at that time
         found.append(Source("hstry", snapshots[-1].parent, [snapshots[-1]]))
+    traces = root / "raw" / "agent-trace"
+    for store in sorted(p for p in traces.iterdir() if p.is_dir()) if traces.is_dir() else []:
+        if files := agent_trace.session_files(store):  # variants (events.variant-*.ndjson) stay put
+            found.append(Source("agent-trace", store, files))
     exports = root / "raw" / "exports"
     for kind in ("chatgpt-export", "claude-export"):
         folder = exports / kind

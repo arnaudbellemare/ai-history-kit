@@ -1,6 +1,6 @@
 # ai-history-kit
 
-**Own your AI history.** One command backs up your Claude Code, Codex, ChatGPT, and Claude.ai conversations. It cleans them so your own words are separated from text that agents and tools wrote, redacts secrets, makes everything searchable, and drafts personal memories for you to review. Everything stays on your machine.
+**Own your AI history.** One command backs up your Claude Code, Codex, ChatGPT, and Claude.ai conversations, plus anything hstry or agent-trace recorded. It cleans them so your own words are separated from text that agents and tools wrote, redacts secrets, makes everything searchable, and drafts personal memories for you to review. Everything stays on your machine.
 
 ```bash
 pipx install git+https://github.com/arnaudbellemare/ai-history-kit
@@ -108,11 +108,18 @@ The backup only adds what's new, so run it on a schedule. On macOS or Linux, run
 | Codex thread database | `~/.codex/thread_history_*.sqlite`, backed up as a consistent snapshot (not parsed) |
 | ChatGPT / Claude.ai | Official export zip or `conversations.json` via `--export` |
 | [hstry](https://github.com/byteowlz/hstry) | `~/.local/share/hstry/hstry.db` when it exists, or `--from-hstry DB`: adds every tool hstry imports (Cursor, OpenCode, Gemini CLI, Aider, Goose, Copilot, Cline, …) |
+| [agent-trace](https://github.com/Siddhant-K-code/agent-trace) | `.agent-traces/` in your home folder or any project folder your Claude Code or Codex history names, or `--agent-traces DIR` (repeatable): adds the tools its hooks record (Gemini CLI, Cursor, Copilot CLI, …) |
 
 **About hstry.** If you already use hstry, ai-history-kit reads its database read-only and backs it up as a consistent snapshot.
 - **Duplicates:** Claude Code and Codex conversations that this kit already read from disk are skipped. Ones only hstry still has, because the app has since deleted them, are kept.
 - **Attribution is a best guess for the other tools.** hstry doesn't record who wrote a message, so only known harness text and dispatched worker threads are separated from your words.
 - **Secrets:** hstry stores them as-is, and they're redacted here like everywhere else.
+
+**About agent-trace.** If you record sessions with [agent-strace](https://github.com/Siddhant-K-code/agent-trace), ai-history-kit reads its trace files directly. It never runs agent-strace.
+- **Duplicates:** agent-strace hooks keep the first 16 characters of the agent's session id. Traces of Claude Code and Codex sessions this kit already read from disk are skipped; traces of sessions the app has since deleted are kept.
+- **Less detail than the native files:** traces have no thinking, and tool output is cut at 1,000 characters.
+- **Tampering shows:** each event carries the hash of the one before it. `aihistory verify` and `REPORT.md` name any session whose chain is broken.
+- **Telemetry:** agent-strace sends anonymous usage telemetry by default. Set `DO_NOT_TRACK=1` or run `agent-strace telemetry disable` to turn it off.
 
 ## Limits, honestly
 
@@ -132,7 +139,7 @@ The backup only adds what's new, so run it on a schedule. On macOS or Linux, run
 python3 -m unittest -v
 ```
 
-The tests build a fake home directory with the traps real histories contain: skill bodies, subagent briefs, Codex reviewer threads, injected AGENTS.md blocks, quoted assistant turns, secrets, forked threads, sessions split across folders, and compressed rollouts. They check that only your own words become memories.
+The tests build a fake home directory with the traps real histories contain: skill bodies, subagent briefs, Codex reviewer threads, injected AGENTS.md blocks, quoted assistant turns, secrets, forked threads, sessions split across folders, compressed rollouts, hstry databases, and agent-trace stores with dispatched sessions and a tampered event. They check that only your own words become memories.
 
 ## License
 

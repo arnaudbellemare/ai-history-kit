@@ -10,8 +10,9 @@
     aihistory agent-me push [--apply] # send ticked memories to a local Agent-Me
     aihistory verify                  # re-check every backed-up file
 
-An hstry database (~/.local/share/hstry/hstry.db, or --from-hstry DB) is read too,
-which adds every tool hstry imports.
+An hstry database (~/.local/share/hstry/hstry.db, or --from-hstry DB) is read too, which
+adds every tool hstry imports. So are agent-trace stores (.agent-traces in any folder your
+history names, or --agent-traces DIR), which add the tools its hooks record.
 """
 
 from __future__ import annotations
@@ -30,22 +31,29 @@ def _out(args) -> Path:
     return Path(args.out).expanduser()
 
 
+def _discover(args):
+    return discover(args.home, args.export, args.from_hstry, args.agent_traces)
+
+
 def _sources(args, prefer_backup: bool):
     out = _out(args)
     if prefer_backup and (out / "CATALOG.json").exists() and not args.no_backup:
-        live_exports = [s for s in discover(args.home, args.export, args.from_hstry) if s.kind.endswith("-export")]
+        live_exports = [s for s in _discover(args) if s.kind.endswith("-export")]
         return backed_up_sources(out) + [s for s in live_exports if not (out / "raw" / "exports" / s.kind).exists()]
-    return discover(args.home, args.export, args.from_hstry)
+    return _discover(args)
 
 
 def cmd_scan(args):
-    scan = [coverage(s) for s in discover(args.home, args.export, args.from_hstry)]
+    scan = [coverage(s) for s in _discover(args)]
     if not scan:
         print("No AI history found. Looked in ~/.claude/projects and ~/.codex; add exports with --export FILE.")
         return 1
     for s in scan:
         if s["kind"] == "hstry":
             print(f"{'hstry':15} {s['conversations']:6} conversations in {s['root']}")
+            continue
+        if s["kind"] == "agent-trace":
+            print(f"{'agent-trace':15} {s['files']:6} sessions {s.get('first_day', ''):10} → {s.get('last_day', ''):10}  in {s['root']}")
             continue
         print(f"{s['kind']:15} {s['files']:6} files  {s.get('first_day', ''):10} → {s.get('last_day', ''):10}  "
               f"{len(s.get('days_without_files', []))} days without files")
@@ -56,7 +64,7 @@ def cmd_run(args):
     from . import index, memories, normalize, report
 
     out = _out(args)
-    found = discover(args.home, args.export, args.from_hstry)
+    found = _discover(args)
     if not found:
         print("No AI history found. Looked in ~/.claude/projects and ~/.codex; add exports with --export FILE.")
         return 1
@@ -80,7 +88,7 @@ def cmd_run(args):
 
 
 def cmd_backup(args):
-    print(json.dumps(back_up(discover(args.home, args.export, args.from_hstry), _out(args)), indent=1))
+    print(json.dumps(back_up(_discover(args), _out(args)), indent=1))
     return 0
 
 
@@ -139,6 +147,9 @@ def main(argv=None) -> int:
                         help="a ChatGPT or Claude.ai export (zip or conversations.json); repeatable")
     parser.add_argument("--from-hstry", type=Path, default=None, metavar="DB",
                         help="an hstry database to read (default: ~/.local/share/hstry/hstry.db when it exists)")
+    parser.add_argument("--agent-traces", type=Path, action="append", default=[], metavar="DIR",
+                        help="an agent-trace store, or a folder holding .agent-traces; repeatable "
+                             "(default: any .agent-traces in your home or a folder your history names)")
     parser.add_argument("--no-backup", action="store_true", help="skip the raw backup and read history in place")
     parser.add_argument("--index-assistant", action="store_true", help="also index assistant replies")
     sub = parser.add_subparsers(dest="command")

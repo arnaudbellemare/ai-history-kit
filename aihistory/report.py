@@ -67,6 +67,15 @@ def write(out_dir: Path, scan: list[dict], steps: dict) -> Path:
             lines.append(f"- hstry: {h['already_read_natively']} conversations skipped because the Claude Code or Codex reader "
                          "already had them. For other tools, who-wrote-what is a best guess: hstry doesn't record it, so only "
                          "known harness text and dispatched worker threads are separated from your words.")
+        if "agent-trace" in n["sources"]:
+            t = n["sources"]["agent-trace"]
+            lines.append(f"- agent-trace: {t['already_read_natively']} sessions skipped because the Claude Code or Codex reader "
+                         "already had them. Traces carry less than those transcripts: no thinking, and tool output cut at "
+                         "1,000 characters.")
+            if t.get("broken_hash_chains"):
+                shown = ", ".join(t["broken_hash_chains"][:10])
+                lines.append(f"- agent-trace: {len(t['broken_hash_chains'])} sessions have a broken hash chain, so they were "
+                             f"edited or cut short after recording: {shown}")
         if n["redactions"]:
             lines.append(f"- Redacted before writing: {n['redactions']}")
         if n["warning_count"]:
