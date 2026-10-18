@@ -18,10 +18,10 @@ import sqlite3
 from pathlib import Path
 from urllib.parse import quote
 
+from ..util import iso
 from . import clip
 from .claude_code import HARNESS_TEXT
 from .codex import INJECTED
-from ..util import iso
 
 DEFAULT_DB = Path(".local") / "share" / "hstry" / "hstry.db"
 NATIVE_ADAPTERS = {"claude-code": "claude-code", "codex": "codex"}
@@ -33,7 +33,9 @@ def open_db(path: Path) -> sqlite3.Connection:
     if not path.is_file():
         raise ValueError(f"no hstry database at {path}")
     try:
-        db = sqlite3.connect(f"file:{quote(str(path.resolve()))}?mode=ro&immutable=1", uri=True)
+        # hstry can leave committed data in WAL even after its CLI exits.
+        # immutable=1 ignores WAL and can make a healthy database look corrupt.
+        db = sqlite3.connect(f"file:{quote(str(path.resolve()))}?mode=ro", uri=True)
         tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     except sqlite3.DatabaseError as error:
         raise ValueError(f"{path} is not a readable hstry database ({error})") from None
@@ -64,6 +66,12 @@ def conversation_count(path: Path) -> int:
         db.close()
 
 
+def _tool_text(value) -> str:
+    if value is None:
+        return ""
+    return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+
+
 def read_db(path: Path):
     db = open_db(path)
     try:
@@ -90,12 +98,23 @@ def read_db(path: Path):
                 elif role == "user" and thread:
                     role = "agent"
                 stamp = iso(m["created_at"])
-                if text.strip():
+                canonical_tools = [p for p in parts if p.get("type") in ("tool_call", "tool_result")]
+                # Tool-result content is a projection of its structured part, not
+                # a second message. Keep one event with the original output.
+                if text.strip() and not (role == "tool" and any(p.get("type") == "tool_result" for p in canonical_tools)):
                     events.append({"kind": "message", "role": role, "text": text, "timestamp": stamp})
                 for part in parts:
                     if part.get("type") == "thinking" and (part.get("text") or "").strip():
                         events.append({"kind": "reasoning", "role": "assistant", "text": part["text"], "timestamp": stamp})
-                for tool in tools.get(m["id"], []):
+                    elif part.get("type") == "tool_call":
+                        events.append({"kind": "tool_call", "role": "assistant", "tool": part.get("name") or "tool",
+                                       "text": clip(_tool_text(part.get("input"))), "timestamp": stamp})
+                    elif part.get("type") == "tool_result":
+                        events.append({"kind": "tool_result", "role": "tool",
+                                       "text": clip(_tool_text(part.get("output", text))), "timestamp": stamp})
+                # New imports use parts_json; older stores can use tool_calls.
+                # Prefer canonical parts when both representations are present.
+                for tool in tools.get(m["id"], []) if not canonical_tools else []:
                     events.append({"kind": "tool_call", "role": "assistant", "tool": tool["tool_name"],
                                    "text": clip(tool["input"] or ""), "timestamp": stamp})
                     if tool["output"]:

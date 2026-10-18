@@ -45,7 +45,11 @@ class TraceWriter:
         append_private_line(self.folder / "annotations.jsonl", json.dumps(row, ensure_ascii=False, sort_keys=True))
 
     def close(self, **extra) -> None:
-        self._write_meta(ended_at=time.time(), tool_calls=self.counts.get("tool_call", 0), **extra)
+        # Upstream SessionMeta rejects unknown keys such as exit_code. Keep kit-only
+        # run details alongside scores in annotations, leaving metadata replayable.
+        self._write_meta(ended_at=time.time(), tool_calls=self.counts.get("tool_call", 0))
+        if extra:
+            self.annotate({"run_result": extra})
 
 
 def _result_text(content) -> str:

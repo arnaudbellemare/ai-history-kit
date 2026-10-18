@@ -86,7 +86,7 @@ GEPA sees only the train and validation prompts. Its rewrites come from `claude 
 - **Prompts come from you.** `mine` offers three kinds of message you wrote: the one just before a target skill was loaded, ones that mention your keywords, and a random draw as likely negatives. Subagent briefs, headless runs and injected text are never offered. You label every prompt; no model does.
 - **The agent sees your real menu.** Your other skills are installed as stub decoys in a throwaway workspace, so a target skill competes the way it does in your sessions. A run counts as right when the agent loads only correct skills, or none when none is right.
 - **Claude Code runs with no side effects:** project settings only, no MCP servers, no saved session, and edit, shell and web tools denied. Codex (`--agent codex`, `codex exec --ephemeral` in a read-only sandbox) is experimental: check one run by hand before trusting its scores.
-- **Every run is an agent-trace session** under `optimize/<run>/traces/`, scored from its events. Claude Code and Codex are judged the same way, and you can read back exactly what the agent did. The format follows agent-strace's source; the kit hasn't yet been checked against agent-strace itself.
+- **Every run is an agent-trace session** under `optimize/<run>/traces/`, scored from its events. Claude Code and Codex are judged the same way, and you can read back exactly what the agent did. Import, hash verification and replay are [checked against real agent-strace](docs/agent-strace-compatibility.md). Kit-only run results such as exit codes live in `annotations.jsonl`.
 - **Guards:**
   - every `eval` prints how many agent runs it plans, and more than `--max-runs` (default 200) needs `--yes`;
   - an arm is evaluated on the test split once, so new descriptions need a new arm name;
@@ -202,7 +202,7 @@ The backup only adds what's new, so run it on a schedule. On macOS or Linux, run
 | [hstry](https://github.com/byteowlz/hstry) | `~/.local/share/hstry/hstry.db` when it exists, or `--from-hstry DB`: adds every tool hstry imports (Cursor, OpenCode, Gemini CLI, Aider, Goose, Copilot, Cline, …) |
 | [agent-trace](https://github.com/Siddhant-K-code/agent-trace) | `.agent-traces/` in your home folder or any project folder your Claude Code or Codex history names, or `--agent-traces DIR` (repeatable): adds the tools its hooks record (Gemini CLI, Cursor, Copilot CLI, …) |
 
-**About hstry.** If you already use hstry, ai-history-kit reads its database read-only and backs it up as a consistent snapshot.
+**About hstry.** If you already use hstry, ai-history-kit reads its database read-only and backs it up as a consistent snapshot, including committed WAL data. [Checked against real hstry 0.5.27](docs/hstry-compatibility.md).
 - **Duplicates:** Claude Code and Codex conversations that this kit already read from disk are skipped. Ones only hstry still has, because the app has since deleted them, are kept.
 - **Attribution is a best guess for the other tools.** hstry doesn't record who wrote a message, so only known harness text and dispatched worker threads are separated from your words.
 - **Secrets:** hstry stores them as-is, and they're redacted here like everywhere else.
@@ -220,7 +220,7 @@ The backup only adds what's new, so run it on a schedule. On macOS or Linux, run
   - working rules or requests you repeat in 3 or more separate conversations, such as "Never push to main without asking".
 
   The kit doesn't guess traits from patterns. Coding-agent sessions rarely contain "I prefer…"-style sentences; ChatGPT and Claude.ai exports usually contain many more. Review everything; frequency is evidence, not truth.
-- **Headless `claude -p` runs and subagent transcripts don't feed memories.** Their prompts usually come from scripts or other agents. They're still backed up and searchable.
+- **Headless `claude -p` runs and subagent transcripts don't feed memories or optimizer prompt mining.** Their prompts usually come from scripts or other agents. Any `sdk*` entrypoint marks a Claude transcript headless, including mixed or resumed transcripts; missing entrypoint metadata alone does not. So does a session that ran in a system temp folder (`/tmp`, `/private/tmp`, `/var/folders`): a `claude -p` started from inside the Claude desktop app records the desktop's entrypoint, so the folder it ran in is the only sign it was a script. They're still backed up and searchable.
 - **Thinking text is mostly empty.** Recent Claude models store an empty, signed thinking block by default. `REPORT.md` shows how much was kept. Don't use it to judge why an agent did something.
 - **Tool inputs and outputs are truncated** to 2,000 characters in the corpus. The raw backup keeps everything.
 - **"Days without files" in the report are informational.** They may be days off, or history an app deleted before you backed it up.
