@@ -60,7 +60,7 @@ def _result_text(content) -> str:
 
 def from_claude_stream(lines, writer: TraceWriter) -> dict:
     """Convert `claude -p --output-format stream-json --verbose` output; returns cost and model."""
-    summary = {"cost_usd": None, "model": None}
+    summary = {"cost_usd": None, "model": None, "subtype": None}
     for line in lines:
         try:
             event = json.loads(line)
@@ -87,7 +87,7 @@ def from_claude_stream(lines, writer: TraceWriter) -> dict:
                     writer.event("tool_result", {"tool_use_id": block.get("tool_use_id"),
                                                  "result": clip(_result_text(block.get("content")), 1000)})
         elif kind == "result":
-            summary["cost_usd"] = event.get("total_cost_usd")
+            summary["cost_usd"], summary["subtype"] = event.get("total_cost_usd"), event.get("subtype")
             writer.event("session_end", {"subtype": event.get("subtype"), "cost_usd": event.get("total_cost_usd"),
                                          "num_turns": event.get("num_turns")}, duration_ms=event.get("duration_ms"))
     return summary

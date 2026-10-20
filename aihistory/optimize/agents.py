@@ -102,6 +102,10 @@ class ClaudeCodeAgent:
             self.thinking = False  # an older Claude Code without the flag
             code, stdout, stderr = _run(self.command(permissions), workspace, prompt, timeout)
         summary = from_claude_stream(stdout.splitlines(), writer)
+        if code and summary["subtype"] == "error_max_turns":
+            # The agent ran out of turns, which is an outcome to score (what it loaded or did by then),
+            # not an infrastructure failure to retry. Claude Code still exits 1 for it.
+            code = 0
         if code:
             writer.event("error", {"error": stderr[-500:] or f"exit {code}"})
         return RunResult(code, round(time.monotonic() - started, 1), summary["cost_usd"], stderr[-500:] if code else None)
