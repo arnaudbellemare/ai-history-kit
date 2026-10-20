@@ -182,5 +182,50 @@ class TrainTests(unittest.TestCase):
         self.assertFalse(self.reflections)
 
 
+FAKE_CLAUDE = """#!/bin/sh
+cat > /dev/null
+{body}
+"""
+MAX_TURNS_STREAM = "\n".join(json.dumps(line) for line in [
+    {"type": "system", "subtype": "init", "model": "claude-haiku", "skills": ["demo"]},
+    {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t1", "name": "Skill", "input": {"skill": "demo"}}]}},
+    {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t2", "name": "Grep", "input": {"pattern": "x"}}]}},
+    {"type": "result", "subtype": "error_max_turns", "total_cost_usd": 0.001, "num_turns": 4},
+])
+
+
+class ClaudeRunnerTests(unittest.TestCase):
+    """The Claude Code runner, driven by a fake `claude` that prints a canned stream."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.run_dir = experiment.create_run(self.root / "out", "c", targets={"demo": "Builds demos."})
+        data = [example("p1", "please build a demo", ["demo"], "pos:demo")]
+        (self.run_dir / "dataset.json").write_text(json.dumps({"train": [], "val": [], "test": data}))
+
+    def fake(self, body):
+        path = self.root / "claude"
+        path.write_text(FAKE_CLAUDE.format(body=body))
+        path.chmod(0o755)
+        return agents.ClaudeCodeAgent(model="haiku", thinking=False, executable=str(path))
+
+    def test_hitting_the_turn_limit_is_scored_not_retried(self):
+        agent = self.fake(f"cat <<'STREAM'\n{MAX_TURNS_STREAM}\nSTREAM\nexit 1")
+        result = experiment.evaluate(self.run_dir, agent, "test", ["original"], runs=1, workers=1)
+        row, = experiment.rollouts(self.run_dir)
+        self.assertEqual(result["errors"], 0, "the skill decision was made before the turn limit; score it")
+        self.assertEqual((row["score"], row["loaded"], row["error"]), (1.0, ["demo"], None))
+
+    def test_a_real_failure_stays_an_error(self):
+        agent = self.fake("echo 'Not logged in' >&2\nexit 1")
+        result = experiment.evaluate(self.run_dir, agent, "test", ["original"], runs=1, workers=1)
+        row, = experiment.rollouts(self.run_dir)
+        self.assertEqual(result["errors"], 1)
+        self.assertIsNone(row["score"], "an infrastructure failure is retried, never scored")
+        self.assertIn("Not logged in", row["error"])
+
+
 if __name__ == "__main__":
     unittest.main()
