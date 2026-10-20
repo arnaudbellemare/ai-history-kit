@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from . import __version__
@@ -38,6 +39,8 @@ def _discover(args):
 
 
 def _sources(args, prefer_backup: bool):
+    if args.from_backup:
+        return backed_up_sources(args.from_backup.expanduser())
     out = _out(args)
     if prefer_backup and (out / "CATALOG.json").exists() and not args.no_backup:
         live_exports = [s for s in _discover(args) if s.kind.endswith("-export")]
@@ -66,7 +69,10 @@ def cmd_run(args):
     from . import index, memories, normalize, report
 
     out = _out(args)
-    found = _discover(args)
+    found = _sources(args, prefer_backup=False)
+    if not found and args.from_backup:
+        print(f"No backup found in {args.from_backup}: expected raw/claude-code/projects, raw/codex/sessions or raw/hstry.")
+        return 1
     if not found:
         print("No AI history found. Looked in ~/.claude/projects and ~/.codex; add exports with --export FILE.")
         return 1
@@ -74,7 +80,7 @@ def cmd_run(args):
     steps = {}
     listing = ", ".join("{} ({} files)".format(s["kind"], s["files"]) for s in scan)
     print(f"Found: {listing}")
-    if not args.no_backup:
+    if not args.no_backup and not args.from_backup:
         print("Backing up raw history (verified copies, nothing deleted)…")
         steps["backup"] = back_up(found, out)
         found = _sources(args, prefer_backup=True)
@@ -194,6 +200,18 @@ def cmd_optimize(args):
         home = args.home or Path.home()
         roots = experiment.skill_roots(home, Path.cwd()) + [Path(d).expanduser() for d in args.skills_dir]
         menu = experiment.find_skills(roots)
+        if not args.skill and args.missed_since is None:
+            raise ValueError("give --skill NAME, or --missed-since DAYS to target the skills the agent missed")
+        if args.missed_since is not None:
+            since = datetime.now(timezone.utc) - timedelta(days=args.missed_since)
+            misses = dataset.recent_misses(out, set(menu), since)
+            if misses:
+                print(f"Skills you invoked yourself after the agent missed them, past {args.missed_since} days: "
+                      + ", ".join(f"{skill} ({times}x)" for skill, times in misses.items()))
+            args.skill += [skill for skill in misses if skill not in args.skill]
+            if not args.skill:
+                print(f"No skill was missed in the past {args.missed_since} days; nothing to mine.")
+                return 0
         targets = {agents.safe_name(s): menu.get(agents.safe_name(s)) for s in args.skill}
         experiment.create_run(out, args.run, targets, decoys=None if args.no_decoys else menu)
         keywords = {k: v.split(",") for k, v in experiment.parse_assignments(args.keywords).items()}
@@ -279,6 +297,9 @@ def main(argv=None) -> int:
                         help="an agent-trace store, or a folder holding .agent-traces; repeatable "
                              "(default: any .agent-traces in your home or a folder your history names)")
     parser.add_argument("--no-backup", action="store_true", help="skip the raw backup and read history in place")
+    parser.add_argument("--from-backup", type=Path, default=None, metavar="DIR",
+                        help="read a backup kept elsewhere (a folder holding raw/, such as one `aihistory backup` made on "
+                             "an external drive) instead of your live history; nothing is copied")
     parser.add_argument("--index-assistant", action="store_true", help="also index assistant replies")
     sub = parser.add_subparsers(dest="command")
     for name in ("run", "scan", "backup", "normalize", "index", "memories", "verify"):
@@ -307,7 +328,9 @@ def main(argv=None) -> int:
     optimize = sub.add_parser("optimize", help="test (and tune) skill descriptions against prompts you wrote")
     optimize_sub = optimize.add_subparsers(dest="optimize_command", required=True)
     mine = optimize_sub.add_parser("mine", help="candidate prompts from your history -> LABEL.md")
-    mine.add_argument("--skill", action="append", required=True, help="a target skill; repeatable")
+    mine.add_argument("--skill", action="append", default=[], help="a target skill; repeatable")
+    mine.add_argument("--missed-since", type=int, metavar="DAYS",
+                      help="also target every skill you invoked yourself after the agent missed it, in the past DAYS days")
     mine.add_argument("--keywords", action="append", default=[], metavar="SKILL=word,word",
                       help="also offer your messages that mention these words")
     mine.add_argument("--negatives", type=int, default=40, help="random messages of yours to offer as likely negatives")

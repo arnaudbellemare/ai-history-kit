@@ -83,7 +83,7 @@ aihistory optimize report --run triggers
 
 GEPA sees only the train and validation prompts. Its rewrites come from `claude -p` with no tools or MCP servers (`--reflection-model`, default Sonnet), never from gepa's default model. A training run makes up to `budget × runs` agent runs, plus one reflection call per rewrite.
 
-- **Prompts come from you, with labels pre-filled where there's evidence.** `mine` offers messages you wrote: ones a target skill was loaded for, ones that mention your keywords, and a random draw as likely negatives. Subagent briefs, headless runs and injected text are never offered. Each pre-filled label says where it came from:
+- **Prompts come from you, with labels pre-filled where there's evidence.** Name the skills with `--skill`, or let `--missed-since DAYS` pick the ones you had to invoke yourself. `mine` offers messages you wrote: ones a target skill was loaded for, ones that mention your keywords, and a random draw as likely negatives. Subagent briefs, headless runs and injected text are never offered. Each pre-filled label says where it came from:
   - `history:accepted`: the agent loaded the skill and you carried on;
   - `history:interrupted` or `history:corrected`: you stopped it, so loading was probably wrong;
   - `history:missed-then-invoked`: nothing loaded, then you invoked the skill yourself;
@@ -199,6 +199,25 @@ The backup only adds what's new, so run it on a schedule. On macOS or Linux, run
 ```
 30 3 * * * aihistory --out ~/AI-History backup >> ~/AI-History/backup.log 2>&1
 ```
+
+Keep the backup on an external drive? `aihistory --out /Volumes/Drive/AI-History backup` makes it there, and `aihistory --from-backup /Volumes/Drive/AI-History run` builds `~/AI-History` from it without copying anything. Tools delete old sessions (Claude Code keeps about a month by default), so the backup is the only full record.
+
+## A routine
+
+- **Every day:** the backup above.
+- **Every month:** rebuild, then mine prompts for the skills your agent missed:
+
+  ```bash
+  aihistory run
+  aihistory optimize mine --run misses-2026-11 --missed-since 30
+  ```
+
+  `--missed-since 30` targets every skill you invoked yourself in the past 30 days after the agent loaded nothing. The prompts it missed arrive pre-labelled (`history:missed-then-invoked`). With no `--generate` or `--judge`, `mine` makes no model calls. A month without misses mines nothing.
+- **Each run:**
+  1. Confirm the labels with `optimize review`, then `optimize label`.
+  2. Evaluate the original description against a one-line control.
+  3. If the control wins, adopt it.
+  4. Only if it doesn't, try `optimize train`.
 
 ## What it reads
 

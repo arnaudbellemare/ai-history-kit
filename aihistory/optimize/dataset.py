@@ -26,6 +26,8 @@ import json
 import math
 import random
 import re
+from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 
 from ..memories import owner_text
@@ -97,6 +99,43 @@ def _slash(text: str) -> tuple[str, str]:
     return safe_name(name), args.strip()
 
 
+def _missed_prompt(events: list[dict], owner: list[int], n: int, skills) -> str:
+    """Your plain prompt just before the /skill at owner[n], if the agent loaded none of `skills` after it."""
+    for back in reversed(owner[max(0, n - MISS_WINDOW):n]):
+        if events[back]["kind"] != "message":
+            continue
+        if any(s in skills for s in skills_loaded(events[back:owner[n]])):
+            return ""
+        return owner_text(events[back]["text"]).strip()
+    return ""
+
+
+def _when(stamp) -> datetime | None:
+    try:
+        when = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return when if when.tzinfo else when.replace(tzinfo=timezone.utc)
+
+
+def recent_misses(out_dir: Path, skills, since: datetime) -> dict[str, int]:
+    """{skill: times} you invoked one of `skills` yourself since `since`, after the agent loaded none of them."""
+    counts = Counter()
+    for record in read_corpus(out_dir):
+        if record.get("subagent") or record.get("headless"):
+            continue
+        events = record["events"]
+        owner = [i for i, e in enumerate(events) if e["role"] == "user" and e["kind"] in ("message", "command")]
+        for n, i in enumerate(owner):
+            if events[i]["kind"] != "command" or not events[i]["text"].startswith("/"):
+                continue
+            skill, _ = _slash(events[i]["text"])
+            when = _when(events[i].get("timestamp") or record.get("updated_at") or record.get("created_at"))
+            if skill in skills and when and when >= since and _missed_prompt(events, owner, n, skills):
+                counts[skill] += 1
+    return dict(counts.most_common())
+
+
 def mine(out_dir: Path, name: str, skills: list[str], keywords: dict[str, list[str]] | None = None,
          negatives: int = 40, per_skill: int = 40, seed: int = 7, run_dir: Path | None = None,
          skill_files: dict[str, Path] | None = None, generate: int = 0, generator=None, judge=None,
@@ -131,13 +170,8 @@ def mine(out_dir: Path, name: str, skills: list[str], keywords: dict[str, list[s
                     continue
                 if len(request) >= 12:
                     add(request, record, f"you invoked {skill}", by="history:invoked", gold=[skill])
-                for back in reversed(owner[max(0, n - MISS_WINDOW):n]):
-                    if events[back]["kind"] != "message":
-                        continue
-                    if not any(s in targets for s in skills_loaded(events[back:i])):
-                        if text := owner_text(events[back]["text"]).strip():
-                            add(text, record, f"missed, then you invoked {skill}", by="history:missed-then-invoked", gold=[skill])
-                    break
+                if text := _missed_prompt(events, owner, n, targets):
+                    add(text, record, f"missed, then you invoked {skill}", by="history:missed-then-invoked", gold=[skill])
                 continue
             text = owner_text(event["text"]).strip()
             following = owner[n + 1] if n + 1 < len(owner) else len(events)
