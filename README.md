@@ -16,7 +16,7 @@ No dependencies beyond Python 3.10+. Nothing is uploaded anywhere.
 
 - **Apps delete your history.** Coding agents prune old sessions, and Codex compresses and drops old rollouts. If you want your history in a year, keep your own copy now.
 - **Most "user" text in a transcript isn't yours.** Agents write prompts for subagents. Harnesses inject skill instructions, system reminders, task reports, and AGENTS.md files as "user" messages. Mine that naively and your personal memory fills with words an agent wrote. This kit labels every message by who actually wrote it.
-- **Transcripts are full of secrets.** API keys, tokens, and passwords pasted into chats are redacted before anything is written to the cleaned corpus.
+- **Transcripts are full of secrets.** API keys, tokens, and passwords pasted into chats are redacted before anything is written to the cleaned corpus. So are other people's contact details: email addresses, phone numbers, Canadian postal codes, and card and SIN numbers with a valid check digit. Names and street addresses are not detected, so review the corpus before you share any of it.
 
 ## Three steps
 
